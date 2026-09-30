@@ -68,94 +68,99 @@ struct MenuView: View {
             }
             
             Divider()
-            
-            // --- COLOR FILTER SECTION ---
-            // These drive System Settings › Accessibility › Display › Color Filters (Color Tint).
-            VStack(spacing: 16) {
+
+            // The slider labels share one column, as wide as the longest of them in the system language.
+            Grid(alignment: .leading, verticalSpacing: 16) {
+                // --- COLOR FILTER SECTION ---
+                // These drive System Settings › Accessibility › Display › Color Filters (Color Tint).
                 // 1. ON/OFF (the "Color filters" switch)
-                HStack {
-                    Text("Color filters")
-                        .fontWeight(.medium)
-                    Spacer()
-                    Toggle("Color filters", isOn: $controller.isColorFilterOn)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .disabled(controller.isAutoMode)
+                GridRow {
+                    HStack {
+                        Text(SystemStrings.colorFilters)
+                            .fontWeight(.medium)
+                        Spacer()
+                        Toggle(SystemStrings.colorFilters, isOn: $controller.isColorFilterOn)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(controller.isAutoMode)
+                    }
+                    .gridCellColumns(2)
                 }
-                
+
                 // 2. INTENSITY
-                HStack(alignment: .top) {
-                    Text("Intensity")
+                GridRow(alignment: .top) {
+                    Text(SystemStrings.intensity)
                         .fontWeight(.medium)
-                        .frame(width: 75, alignment: .leading)
+                        .frame(minWidth: 75, alignment: .leading)
                         .padding(.top, 4)
-                    
+
                     VStack(spacing: 2) {
                         Slider(value: $controller.intensity, in: ColorFilterManager.shared.intensityRange)
                             .tint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
                             .disabled(controller.isAutoMode)
-                        
+
                         HStack {
-                            Text("Low").font(.system(size: 10)).foregroundColor(.secondary)
+                            Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
                             Spacer()
-                            Text("High").font(.system(size: 10)).foregroundColor(.secondary)
+                            Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
                         }
                     }
                 }
-                
+
                 // 3. TINT
-                HStack {
-                    Text("Tint")
+                GridRow {
+                    Text(SystemStrings.tint)
                         .fontWeight(.medium)
-                        .frame(width: 75, alignment: .leading)
-                    
+                        .frame(minWidth: 75, alignment: .leading)
+
                     TintSlider(value: $controller.tint)
                         .disabled(controller.isAutoMode)
                         .opacity(controller.isAutoMode ? 0.6 : 1.0)
                 }
-            }
-            
-            Divider()
-            
-            // --- BRIGHTNESS SECTION ---
-            HStack(alignment: .top) {
-                Text("Brightness")
-                    .fontWeight(.medium)
-                    .frame(width: 75, alignment: .leading)
-                    .padding(.top, 4)
-                
-                VStack(spacing: 2) {
-                    Slider(
-                        value: $controller.brightness,
-                        in: 0.0...1.0,
-                        onEditingChanged: { isEditing in
-                            controller.isUserDraggingSlider = isEditing
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                // --- BRIGHTNESS SECTION ---
+                GridRow(alignment: .top) {
+                    Text(SystemStrings.brightness)
+                        .fontWeight(.medium)
+                        .frame(minWidth: 75, alignment: .leading)
+                        .padding(.top, 4)
+
+                    VStack(spacing: 2) {
+                        Slider(
+                            value: $controller.brightness,
+                            in: 0.0...1.0,
+                            onEditingChanged: { isEditing in
+                                controller.isUserDraggingSlider = isEditing
+                            }
+                        )
+                        .tint(.white)
+                        .disabled(controller.isAutoMode)
+
+                        HStack {
+                            Text("Dim").font(.system(size: 10)).foregroundColor(.secondary)
+                            Spacer()
+                            Text("Max").font(.system(size: 10)).foregroundColor(.secondary)
                         }
-                    )
-                    .tint(.white)
-                    .disabled(controller.isAutoMode)
-                    
-                    HStack {
-                        Text("Dim").font(.system(size: 10)).foregroundColor(.secondary)
-                        Spacer()
-                        Text("Max").font(.system(size: 10)).foregroundColor(.secondary)
                     }
                 }
             }
-            
+
             Divider()
-            
+
             // --- ACTION BUTTONS ---
             HStack {
-                Button("Reset") {
+                Button(SystemStrings.reset) {
                     controller.reset()
                 }
                 .buttonStyle(.bordered)
-                
+
                 Spacer()
-                
-                Button("Quit") {
+
+                Button(SystemStrings.quit) {
                     controller.reset()
                     NSApplication.shared.terminate(nil)
                 }
@@ -648,5 +653,40 @@ class ColorFilterManager {
                 setCategoryEnabled(colorCategory, false)
             }
         }
+    }
+}
+
+// MARK: - 7. System Strings (System Settings' Translations)
+/// Labels this app shares with System Settings, read from the string tables System Settings (and
+/// AppKit) load them from, so they come out in the system language and worded exactly as there.
+/// Each keeps its English text as a fallback in case a table ever moves or drops the key.
+enum SystemStrings {
+    private static let accessibilitySettings = "/System/Library/ExtensionKit/Extensions/AccessibilitySettingsExtension.appex"
+    private static let displaysSettings = "/System/Library/ExtensionKit/Extensions/DisplaysExt.appex"
+    private static let controlCenterSettings = "/System/Library/ExtensionKit/Extensions/ControlCenterSettings.appex"
+    private static let appKit = "/System/Library/Frameworks/AppKit.framework"
+    
+    // System Settings › Accessibility › Display › Color Filters
+    static let colorFilters = lookup("display.colorFilter.enable", in: accessibilitySettings, english: "Color filters")
+    static let intensity = lookup("display.colorFilter.intensity", in: accessibilitySettings, english: "Intensity")
+    static let low = lookup("display.colorFilter.intensity.low", in: accessibilitySettings, english: "Low")
+    static let high = lookup("display.colorFilter.intensity.high", in: accessibilitySettings, english: "High")
+    static let tint = lookup("display.colorFilter.tint", in: accessibilitySettings, english: "Tint")
+    
+    // System Settings › Displays
+    static let brightness = lookup("Brightness", in: displaysSettings, english: "Brightness")
+    
+    // System Settings › Control Center's Reset button, and AppKit's Quit button
+    static let reset = lookup("Reset", in: controlCenterSettings, english: "Reset")
+    static let quit = lookup("Quit", table: "Document", in: appKit, english: "Quit")
+    
+    /// The user's preferred languages. This app has no translations of its own, so a plain
+    /// `localizedString` lookup would follow the app into English; asking with these picks each
+    /// table's closest match the way System Settings does (e.g. French (Canada) before French).
+    private static let languages = Locale.preferredLanguages.map(Locale.Language.init(identifier:))
+    
+    private static func lookup(_ key: String, table: String = "Localizable", in bundlePath: String, english: String) -> String {
+        guard let bundle = Bundle(path: bundlePath) else { return english }
+        return bundle.localizedString(forKey: key, value: english, table: table, localizations: languages)
     }
 }
