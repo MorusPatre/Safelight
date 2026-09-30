@@ -45,7 +45,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationWillTerminate(_ notification: Notification) {
-        // Ensure color filters are cleared when the app is force-quit
+        // Ensure software dimming is cleared when the app is force-quit
         GammaManager.shared.reset()
     }
 }
@@ -70,8 +70,21 @@ struct MenuView: View {
             Divider()
             
             // --- COLOR FILTER SECTION ---
+            // These drive System Settings › Accessibility › Display › Color Filters (Color Tint).
             VStack(spacing: 16) {
-                // 1. INTENSITY
+                // 1. ON/OFF (the "Color filters" switch)
+                HStack {
+                    Text("Color Filter")
+                        .fontWeight(.medium)
+                    Spacer()
+                    Toggle("Color Filter", isOn: $controller.isColorFilterOn)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .disabled(controller.isAutoMode)
+                }
+                
+                // 2. INTENSITY
                 HStack(alignment: .top) {
                     Text("Intensity")
                         .fontWeight(.medium)
@@ -79,7 +92,7 @@ struct MenuView: View {
                         .padding(.top, 4)
                     
                     VStack(spacing: 2) {
-                        Slider(value: $controller.intensity, in: 0.0...1.0)
+                        Slider(value: $controller.intensity, in: ColorFilterManager.shared.intensityRange)
                             .tint(Color(hue: Double(controller.tint), saturation: 1.0, brightness: 1.0))
                             .disabled(controller.isAutoMode)
                         
@@ -91,7 +104,7 @@ struct MenuView: View {
                     }
                 }
                 
-                // 2. TINT
+                // 3. TINT
                 HStack {
                     Text("Tint")
                         .fontWeight(.medium)
@@ -229,9 +242,12 @@ struct TintSlider: View {
 class ColorController: ObservableObject {
     static let shared = ColorController()
     
-    @Published var intensity: Float = 0.0 { didSet { updateDisplay() } }
-    @Published var tint: Float = 0.0      { didSet { updateDisplay() } }
-    @Published var brightness: Float = 1.0 { didSet { updateDisplay() } }
+    // Mirror of the system Color Tint filter: `intensity` and `tint` are the exact values
+    // System Settings stores (tint is its 0–360° Tint slider divided by 360).
+    @Published var isColorFilterOn: Bool = false { didSet { updateColorFilter() } }
+    @Published var intensity: Float = 1.0 { didSet { colorSliderChanged() } }
+    @Published var tint: Float = 0.0      { didSet { colorSliderChanged() } }
+    @Published var brightness: Float = 1.0 { didSet { updateBrightness() } }
     
     @Published var isAutoMode: Bool = false {
         didSet { if isAutoMode { applyAutoSettings() } }
@@ -239,6 +255,7 @@ class ColorController: ObservableObject {
     
     var isUserDraggingSlider: Bool = false
     private var isSyncingWithSystem: Bool = false
+    private var isSyncingColorFilter: Bool = false
     
     private var targetSystemBrightness: Float? = nil
     private var lastSystemBrightness: Float = -1.0
@@ -265,6 +282,20 @@ class ColorController: ObservableObject {
             self.brightness = nativeBrightness
             self.lastSystemBrightness = nativeBrightness
         }
+        
+        // Follow changes made in System Settings (or anywhere else) to the color filter
+        syncWithSystemColorFilter()
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, _, _, _ in
+                guard let observer = observer else { return }
+                Unmanaged<ColorController>.fromOpaque(observer).takeUnretainedValue().syncWithSystemColorFilter()
+            },
+            ColorFilterManager.settingsChangedNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
         
         timer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.applyAutoSettings()
@@ -386,19 +417,46 @@ class ColorController: ObservableObject {
         let newIntensity = start.intensity + (end.intensity - start.intensity) * progress
         let newBrightness = start.brightness + (end.brightness - start.brightness) * progress
         
+        // The system filter bottoms out at its "Low" intensity, so below that the schedule switches it off
+        let intensityRange = ColorFilterManager.shared.intensityRange
         self.tint = newTint
-        self.intensity = newIntensity
+        self.intensity = min(max(newIntensity, intensityRange.lowerBound), intensityRange.upperBound)
+        self.isColorFilterOn = newIntensity >= intensityRange.lowerBound
         self.brightness = newBrightness
     }
     
-    func updateDisplay() {
-        GammaManager.shared.setGamma(tint: tint, intensity: intensity, brightness: brightness, skipHardwareUpdate: isSyncingWithSystem)
+    /// Dragging Intensity or Tint turns the filter on, the way raising Intensity from zero used to.
+    private func colorSliderChanged() {
+        if !isColorFilterOn && !isAutoMode && !isSyncingColorFilter {
+            isColorFilterOn = true // its didSet writes the new slider values as well
+        } else {
+            updateColorFilter()
+        }
+    }
+    
+    func updateColorFilter() {
+        guard !isSyncingColorFilter else { return }
+        ColorFilterManager.shared.write(ColorFilterManager.State(isOn: isColorFilterOn, hue: tint, intensity: intensity))
+    }
+    
+    func syncWithSystemColorFilter() {
+        guard let state = ColorFilterManager.shared.read() else { return }
+        
+        isSyncingColorFilter = true
+        if isColorFilterOn != state.isOn { isColorFilterOn = state.isOn }
+        if abs(tint - state.hue) > 0.0001 { tint = state.hue }
+        if abs(intensity - state.intensity) > 0.0001 { intensity = state.intensity }
+        isSyncingColorFilter = false
+    }
+    
+    func updateBrightness() {
+        GammaManager.shared.setGamma(brightness: brightness, skipHardwareUpdate: isSyncingWithSystem)
     }
     
     func reset() {
         isAutoMode = false
         targetSystemBrightness = nil
-        intensity = 0.0
+        isColorFilterOn = false
         brightness = 1.0
     }
 }
@@ -414,8 +472,6 @@ struct ColorKeyframe {
 class GammaManager {
     static let shared = GammaManager()
     
-    private var lastTint: Float = -1.0
-    private var lastIntensity: Float = -1.0
     private var lastBrightness: Float = -1.0
     private var isGloballyRestored: Bool = false
     
@@ -445,13 +501,11 @@ class GammaManager {
         return result == 0 ? brightness : nil
     }
     
-    func setGamma(tint: Float, intensity: Float, brightness: Float, skipHardwareUpdate: Bool = false) {
-        if abs(tint - lastTint) < 0.001 && abs(intensity - lastIntensity) < 0.001 && abs(brightness - lastBrightness) < 0.001 {
+    func setGamma(brightness: Float, skipHardwareUpdate: Bool = false) {
+        if abs(brightness - lastBrightness) < 0.001 {
             return
         }
         
-        lastTint = tint
-        lastIntensity = intensity
         lastBrightness = brightness
         
         let displays = getAllDisplays()
@@ -474,13 +528,11 @@ class GammaManager {
             
             let softwareBrightness = hardwareBrightnessSucceeded ? 1.0 : max(brightness, 0.05)
             
-            if intensity > 0.001 || softwareBrightness < 0.999 {
+            if softwareBrightness < 0.999 {
                 needsGlobalRestore = false
                 
-                let (redTable, greenTable, blueTable) = calculateGammaTable(tint: tint, intensity: intensity, brightness: softwareBrightness)
-                let tableSize = UInt32(redTable.count)
-                
-                CGSetDisplayTransferByTable(displayID, tableSize, redTable, greenTable, blueTable)
+                let table = calculateGammaTable(brightness: softwareBrightness)
+                CGSetDisplayTransferByTable(displayID, UInt32(table.count), table, table, table)
             }
         }
         
@@ -496,8 +548,6 @@ class GammaManager {
     
     func reset() {
         CGDisplayRestoreColorSyncSettings()
-        lastTint = -1.0
-        lastIntensity = -1.0
         lastBrightness = -1.0
     }
     
@@ -524,30 +574,98 @@ class GammaManager {
         return displays
     }
     
-    private func calculateGammaTable(tint: Float, intensity: Float, brightness: Float) -> ([CGGammaValue],[CGGammaValue], [CGGammaValue]) {
-        let nsColor = NSColor(calibratedHue: CGFloat(tint), saturation: 1.0, brightness: 1.0, alpha: 1.0)
-        let tintR = Float(nsColor.redComponent)
-        let tintG = Float(nsColor.greenComponent)
-        let tintB = Float(nsColor.blueComponent)
-        
-        let multR = 1.0 - (intensity * (1.0 - tintR))
-        let multG = 1.0 - (intensity * (1.0 - tintG))
-        let multB = 1.0 - (intensity * (1.0 - tintB))
-        
+    private func calculateGammaTable(brightness: Float) -> [CGGammaValue] {
         let tableSize = 256
-        var redTable = [CGGammaValue](repeating: 0, count: tableSize)
-        var greenTable = [CGGammaValue](repeating: 0, count: tableSize)
-        var blueTable = [CGGammaValue](repeating: 0, count: tableSize)
+        return (0..<tableSize).map { i in
+            Float(i) / Float(tableSize - 1) * brightness
+        }
+    }
+}
+
+// MARK: - 6. Color Filter Manager (Accessibility Color Filters)
+/// Reads and writes the Color Tint filter in System Settings › Accessibility › Display › Color Filters.
+/// System Settings drives it through these MediaAccessibility functions (exported, but not in the
+/// public headers), and the OS applies the filter itself, so it keeps working outside this app.
+class ColorFilterManager {
+    static let shared = ColorFilterManager()
+    
+    /// Darwin notification MediaAccessibility posts whenever any display filter setting changes.
+    static let settingsChangedNotification = "com.apple.mediaaccessibility.displayFilterSettingsChanged"
+    
+    struct State {
+        var isOn: Bool
+        var hue: Float
+        var intensity: Float
+    }
+    
+    /// The range of System Settings' Intensity slider (`kMADisplayFilterPrefSingleColorIntensityMin`...`Max`).
+    private(set) var intensityRange: ClosedRange<Float> = 0.25...1.0
+    
+    // The on/off switch and filter type are stored per category. Category 1 is "Color",
+    // and type 16 within it is "Color Tint".
+    private let colorCategory = 1
+    private let colorTintType = 16
+    
+    private var getCategoryEnabledFunc: (@convention(c) (Int) -> Bool)?
+    private var setCategoryEnabledFunc: (@convention(c) (Int, Bool) -> Void)?
+    private var getTypeFunc: (@convention(c) (Int) -> Int)?
+    private var setTypeFunc: (@convention(c) (Int, Int) -> Void)?
+    private var getHueFunc: (@convention(c) () -> Double)?
+    private var setHueFunc: (@convention(c) (Double) -> Void)?
+    private var getIntensityFunc: (@convention(c) () -> Double)?
+    private var setIntensityFunc: (@convention(c) (Double) -> Void)?
+    
+    init() {
+        guard let handle = dlopen("/System/Library/Frameworks/MediaAccessibility.framework/MediaAccessibility", RTLD_LAZY) else { return }
         
-        for i in 0..<tableSize {
-            let baseIntensity = Float(i) / Float(tableSize - 1)
-            let dimmedIntensity = baseIntensity * brightness
-            
-            redTable[i] = dimmedIntensity * multR
-            greenTable[i] = dimmedIntensity * multG
-            blueTable[i] = dimmedIntensity * multB
+        func load<T>(_ name: String, as type: T.Type) -> T? {
+            dlsym(handle, name).map { unsafeBitCast($0, to: type) }
         }
         
-        return (redTable, greenTable, blueTable)
+        getCategoryEnabledFunc = load("MADisplayFilterPrefGetCategoryEnabled", as: (@convention(c) (Int) -> Bool).self)
+        setCategoryEnabledFunc = load("MADisplayFilterPrefSetCategoryEnabled", as: (@convention(c) (Int, Bool) -> Void).self)
+        getTypeFunc = load("MADisplayFilterPrefGetType", as: (@convention(c) (Int) -> Int).self)
+        setTypeFunc = load("MADisplayFilterPrefSetType", as: (@convention(c) (Int, Int) -> Void).self)
+        getHueFunc = load("MADisplayFilterPrefGetSingleColorHue", as: (@convention(c) () -> Double).self)
+        setHueFunc = load("MADisplayFilterPrefSetSingleColorHue", as: (@convention(c) (Double) -> Void).self)
+        getIntensityFunc = load("MADisplayFilterPrefGetSingleColorIntensity", as: (@convention(c) () -> Double).self)
+        setIntensityFunc = load("MADisplayFilterPrefSetSingleColorIntensity", as: (@convention(c) (Double) -> Void).self)
+        
+        if let minSym = dlsym(handle, "kMADisplayFilterPrefSingleColorIntensityMin"),
+           let maxSym = dlsym(handle, "kMADisplayFilterPrefSingleColorIntensityMax") {
+            intensityRange = Float(minSym.load(as: Double.self))...Float(maxSym.load(as: Double.self))
+        }
+    }
+    
+    /// `isOn` is only true when the Color Filters switch is on *and* the filter type is Color Tint.
+    func read() -> State? {
+        guard let getCategoryEnabled = getCategoryEnabledFunc, let getType = getTypeFunc,
+              let getHue = getHueFunc, let getIntensity = getIntensityFunc else { return nil }
+        
+        let isOn = getCategoryEnabled(colorCategory) && getType(colorCategory) == colorTintType
+        return State(isOn: isOn, hue: Float(getHue()), intensity: Float(getIntensity()))
+    }
+    
+    /// Writes only what differs from the system, so slider drags don't re-post unchanged values.
+    func write(_ state: State) {
+        guard let current = read(),
+              let setCategoryEnabled = setCategoryEnabledFunc, let setType = setTypeFunc,
+              let setHue = setHueFunc, let setIntensity = setIntensityFunc else { return }
+        
+        if abs(state.hue - current.hue) > 0.0001 {
+            setHue(Double(state.hue))
+        }
+        if abs(state.intensity - current.intensity) > 0.0001 {
+            setIntensity(Double(state.intensity))
+        }
+        if state.isOn != current.isOn {
+            if state.isOn {
+                setType(colorCategory, colorTintType)
+                setCategoryEnabled(colorCategory, true)
+            } else {
+                // Only reached when Color Tint is the active filter, so e.g. a Grayscale filter is left alone
+                setCategoryEnabled(colorCategory, false)
+            }
+        }
     }
 }
