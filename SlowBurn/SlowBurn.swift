@@ -30,7 +30,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         popover.contentSize = NSSize(width: 320, height: 260)
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: MenuView())
+        popover.contentViewController = NSHostingController(rootView: MenuView(customizeSchedule: { [weak self] in
+            self?.popover.performClose(nil)
+            ScheduleWindow.shared.show()
+        }))
     }
     
     @objc func togglePopover(_ sender: AnyObject?) {
@@ -53,6 +56,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - 3. UI (Menu View)
 struct MenuView: View {
     @ObservedObject var controller = ColorController.shared
+    let customizeSchedule: () -> Void
     
     var body: some View {
         VStack(spacing: 20) {
@@ -62,6 +66,8 @@ struct MenuView: View {
                 Text(SystemStrings.schedule)
                     .fontWeight(.medium)
                 Spacer()
+                Button(SystemStrings.customize, action: customizeSchedule)
+                    .controlSize(.small)
                 Toggle(SystemStrings.schedule, isOn: $controller.isAutoMode)
                     .labelsHidden()
                     .toggleStyle(.switch)
@@ -225,6 +231,172 @@ struct TintSlider: NSViewRepresentable {
     }
 }
 
+// MARK: - Schedule Window
+/// The window the Customize… button next to the Schedule switch opens.
+final class ScheduleWindow: NSObject, NSWindowDelegate {
+    static let shared = ScheduleWindow()
+    private var window: NSWindow?
+
+    func show() {
+        ColorController.shared.sortSchedule()
+        if window == nil {
+            let window = NSWindow(contentViewController: NSHostingController(rootView: ScheduleEditor()))
+            window.title = SystemStrings.schedule
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+            window.setContentSize(NSSize(width: 760, height: 600))
+            window.center()
+            self.window = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        ColorController.shared.sortSchedule()
+    }
+}
+
+/// The Schedule's keyframes, a row each, under a preview of the day they make.
+struct ScheduleEditor: View {
+    @ObservedObject var controller = ColorController.shared
+
+    var body: some View {
+        Form {
+            Section {
+                ScheduleDayView(schedule: controller.schedule)
+            }
+
+            Section {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                    GridRow {
+                        Text(SystemStrings.time)
+                        Text(SystemStrings.colorFilters)
+                        Text(SystemStrings.intensity)
+                        Text(SystemStrings.tint)
+                        Text(SystemStrings.brightness)
+                    }
+                    .foregroundStyle(.secondary)
+
+                    ForEach($controller.schedule) { $keyframe in
+                        Divider()
+
+                        GridRow {
+                            DatePicker(SystemStrings.time, selection: Self.time(of: $keyframe), displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                                .datePickerStyle(.stepperField)
+                                .environment(\.timeZone, Self.utc)
+
+                            Toggle(SystemStrings.colorFilters, isOn: $keyframe.isColorFilterOn)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+
+                            Slider(value: $keyframe.intensity, in: ColorFilterManager.shared.intensityRange) {
+                                Text(SystemStrings.intensity)
+                            }
+                            .labelsHidden()
+                            .tint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
+                            .disabled(!keyframe.isColorFilterOn)
+                            .frame(minWidth: 90)
+
+                            TintSlider(value: $keyframe.tint)
+                                .disabled(!keyframe.isColorFilterOn)
+                                .opacity(keyframe.isColorFilterOn ? 1.0 : 0.6)
+                                .frame(minWidth: 90)
+
+                            Slider(value: $keyframe.brightness, in: 0.0...1.0) {
+                                Text(SystemStrings.brightness)
+                            }
+                            .labelsHidden()
+                            .tint(.white)
+                            .frame(minWidth: 90)
+
+                            Button {
+                                controller.deleteKeyframe(keyframe.id)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .help(SystemStrings.delete)
+                            .accessibilityLabel(SystemStrings.delete)
+                            .disabled(controller.schedule.count == 1)
+                        }
+                    }
+                }
+            } footer: {
+                HStack {
+                    Button(SystemStrings.restoreDefaults) {
+                        controller.restoreDefaultSchedule()
+                    }
+                    Spacer()
+                    Button(SystemStrings.add) {
+                        controller.addKeyframe()
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(minWidth: 720, minHeight: 480)
+    }
+
+    // Times of day are edited as times on the first day of 2001 in UTC, which has no daylight saving
+    // changes to skip or repeat a time, so every time reads back as it was set.
+    private static let utc = TimeZone(identifier: "UTC")!
+
+    private static func time(of keyframe: Binding<ColorKeyframe>) -> Binding<Date> {
+        Binding(
+            get: { Date(timeIntervalSinceReferenceDate: Double(keyframe.wrappedValue.minute) * 60) },
+            set: { keyframe.wrappedValue.minute = (Int(($0.timeIntervalSinceReferenceDate / 60).rounded(.down)) % 1440 + 1440) % 1440 }
+        )
+    }
+}
+
+/// The day the Schedule makes, from midnight to midnight: a strip of roughly how white looks on screen
+/// through it, a line at the current time, and a dot under each keyframe.
+struct ScheduleDayView: View {
+    let schedule: [ColorKeyframe]
+
+    private let stripHeight: CGFloat = 36
+
+    var body: some View {
+        TimelineView(.everyMinute) { timeline in
+            Canvas { context, size in
+                let outline = Path(roundedRect: CGRect(x: 0, y: 0, width: size.width, height: stripHeight), cornerRadius: 6)
+                func x(ofMinute minute: Double) -> CGFloat { size.width * minute / 1440 }
+
+                context.drawLayer { strip in
+                    strip.clip(to: outline)
+                    for x in 0..<Int(size.width.rounded(.up)) {
+                        guard let settings = ColorKeyframe.settings(in: schedule, at: Double(x) / size.width * 1440) else { continue }
+                        strip.fill(Path(CGRect(x: CGFloat(x), y: 0, width: 1, height: stripHeight)), with: .color(settings.previewColor))
+                    }
+
+                    let now = Calendar.current.dateComponents([.hour, .minute], from: timeline.date)
+                    let nowX = x(ofMinute: Double(now.hour! * 60 + now.minute!))
+                    strip.fill(Path(CGRect(x: nowX - 1, y: 0, width: 2, height: stripHeight)), with: .color(.accentColor))
+                }
+                context.stroke(outline, with: .style(.separator))
+
+                for keyframe in schedule {
+                    let dot = CGRect(x: x(ofMinute: Double(keyframe.minute)) - 2.5, y: stripHeight + 4, width: 5, height: 5)
+                    context.fill(Path(ellipseIn: dot), with: .style(.secondary))
+                }
+
+                // Midnight, 6, noon, 6 and midnight, the ends kept inside the strip
+                for hour in stride(from: 0, through: 24, by: 6) {
+                    let date = Calendar.current.date(bySettingHour: hour % 24, minute: 0, second: 0, of: timeline.date) ?? timeline.date
+                    let label = Text(date.formatted(.dateTime.hour())).font(.system(size: 10)).foregroundColor(.secondary)
+                    let anchor: UnitPoint = hour == 0 ? .topLeading : hour == 24 ? .topTrailing : .top
+                    context.draw(label, at: CGPoint(x: x(ofMinute: Double(hour * 60)), y: stripHeight + 13), anchor: anchor)
+                }
+            }
+        }
+        .frame(height: stripHeight + 27)
+    }
+}
+
 // MARK: - 4. Logic Controller
 class ColorController: ObservableObject {
     static let shared = ColorController()
@@ -250,20 +422,27 @@ class ColorController: ObservableObject {
     
     private var timer: Timer?
     private var syncTimer: Timer?
-    
-    private let schedule: [ColorKeyframe] = [
-        ColorKeyframe(hour: 0.0,  tint: 0.0,   intensity: 1.00, brightness: 0.30),
-        ColorKeyframe(hour: 6.0,  tint: 0.0,   intensity: 1.00, brightness: 0.30),
-        ColorKeyframe(hour: 7.0,  tint: 43.2,  intensity: 0.30, brightness: 0.85),
-        ColorKeyframe(hour: 8.5,  tint: 180.0, intensity: 0.00, brightness: 1.00),
-        ColorKeyframe(hour: 15.0, tint: 180.0, intensity: 0.00, brightness: 1.00),
-        ColorKeyframe(hour: 17.5, tint: 43.2,  intensity: 0.20, brightness: 0.95),
-        ColorKeyframe(hour: 19.5, tint: 28.8,  intensity: 0.60, brightness: 0.70),
-        ColorKeyframe(hour: 20.5, tint: 18.0,  intensity: 0.85, brightness: 0.50),
-        ColorKeyframe(hour: 21.5, tint: 0.0,   intensity: 1.00, brightness: 0.30),
-        ColorKeyframe(hour: 24.0, tint: 0.0,   intensity: 1.00, brightness: 0.30)
-    ]
-    
+
+    /// The Schedule's keyframes, saved as they're edited. They're kept in the order they were edited
+    /// in until `sortSchedule()`, so a row in the Schedule window doesn't move while its time is typed.
+    @Published var schedule: [ColorKeyframe] = ColorController.loadSchedule() {
+        didSet {
+            if let data = try? JSONEncoder().encode(schedule) {
+                UserDefaults.standard.set(data, forKey: Self.scheduleDefaultsKey)
+            }
+            applyAutoSettings()
+        }
+    }
+
+    private static let scheduleDefaultsKey = "schedule"
+
+    private static func loadSchedule() -> [ColorKeyframe] {
+        guard let data = UserDefaults.standard.data(forKey: scheduleDefaultsKey),
+              let schedule = try? JSONDecoder().decode([ColorKeyframe].self, from: data),
+              !schedule.isEmpty else { return ColorKeyframe.defaultSchedule }
+        return schedule
+    }
+
     init() {
         if let nativeBrightness = GammaManager.shared.getNativeBrightness() {
             self.brightness = nativeBrightness
@@ -382,36 +561,50 @@ class ColorController: ObservableObject {
         
         let now = Date()
         let calendar = Calendar.current
-        let hour = Double(calendar.component(.hour, from: now))
-        let minute = Double(calendar.component(.minute, from: now))
-        let timeInHours = hour + (minute / 60.0)
-        
-        var start = schedule.first!
-        var end = schedule.last!
-        
-        for i in 0..<(schedule.count - 1) {
-            if timeInHours >= schedule[i].hour && timeInHours <= schedule[i+1].hour {
-                start = schedule[i]
-                end = schedule[i+1]
-                break
-            }
-        }
-        
-        let duration = end.hour - start.hour
-        let progress = duration > 0 ? Float((timeInHours - start.hour) / duration) : 0
-        
-        let newTint = start.tint + (end.tint - start.tint) * progress
-        let newIntensity = start.intensity + (end.intensity - start.intensity) * progress
-        let newBrightness = start.brightness + (end.brightness - start.brightness) * progress
-        
-        // The system filter bottoms out at its "Low" intensity, so below that the schedule switches it off
-        let intensityRange = ColorFilterManager.shared.intensityRange
-        self.tint = newTint
-        self.intensity = min(max(newIntensity, intensityRange.lowerBound), intensityRange.upperBound)
-        self.isColorFilterOn = newIntensity >= intensityRange.lowerBound
-        self.brightness = newBrightness
+        let hour = calendar.component(.hour, from: now)
+        let minute = calendar.component(.minute, from: now)
+        guard let settings = ColorKeyframe.settings(in: schedule, at: Double(hour * 60 + minute)) else { return }
+
+        self.tint = settings.tint
+        self.intensity = settings.filterIntensity
+        self.isColorFilterOn = settings.isColorFilterOn
+        self.brightness = settings.brightness
     }
-    
+
+    /// Adds a keyframe at the next free half hour, set to what the schedule already has there.
+    func addKeyframe() {
+        let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
+        let nextHalfHour = ((now.hour! * 60 + now.minute!) / 30 + 1) * 30
+        let taken = Set(schedule.map(\.minute))
+        let minute = (0..<48).lazy.map { (nextHalfHour + $0 * 30) % 1440 }.first { !taken.contains($0) } ?? nextHalfHour % 1440
+
+        let settings = ColorKeyframe.settings(in: schedule, at: Double(minute))
+            ?? ColorKeyframe.Settings(intensity: isColorFilterOn ? intensity : 0, tint: tint, brightness: brightness)
+        schedule.append(ColorKeyframe(
+            minute: minute,
+            isColorFilterOn: settings.isColorFilterOn,
+            intensity: settings.filterIntensity,
+            tint: settings.tint,
+            brightness: settings.brightness
+        ))
+        sortSchedule()
+    }
+
+    /// The schedule always keeps at least one keyframe.
+    func deleteKeyframe(_ id: ColorKeyframe.ID) {
+        guard schedule.count > 1 else { return }
+        schedule.removeAll { $0.id == id }
+    }
+
+    func restoreDefaultSchedule() {
+        schedule = ColorKeyframe.defaultSchedule
+    }
+
+    func sortSchedule() {
+        let sorted = schedule.sorted { $0.minute < $1.minute }
+        if sorted != schedule { schedule = sorted }
+    }
+
     /// Dragging Intensity or Tint turns the filter on, the way raising Intensity from zero used to.
     private func colorSliderChanged() {
         if !isColorFilterOn && !isAutoMode && !isSyncingColorFilter {
@@ -448,11 +641,78 @@ class ColorController: ObservableObject {
     }
 }
 
-struct ColorKeyframe {
-    let hour: Double
-    let tint: Float
-    let intensity: Float
-    let brightness: Float
+/// A point on the Schedule: the settings it reaches `minute` minutes after midnight. In between, the
+/// settings move steadily from one keyframe to the next, and from the last round midnight to the first.
+struct ColorKeyframe: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var minute: Int
+    var isColorFilterOn: Bool
+    var intensity: Float // kept while the filter is off, for when it's turned back on
+    var tint: Float      // degrees
+    var brightness: Float
+
+    static let defaultSchedule: [ColorKeyframe] = [
+        ColorKeyframe(minute: 6 * 60,       isColorFilterOn: true,  intensity: 1.00, tint: 0.0,  brightness: 0.30),
+        ColorKeyframe(minute: 7 * 60,       isColorFilterOn: true,  intensity: 0.30, tint: 43.2, brightness: 0.85),
+        ColorKeyframe(minute: 8 * 60 + 30,  isColorFilterOn: false, intensity: 0.25, tint: 43.2, brightness: 1.00),
+        ColorKeyframe(minute: 15 * 60,      isColorFilterOn: false, intensity: 0.25, tint: 43.2, brightness: 1.00),
+        ColorKeyframe(minute: 17 * 60 + 30, isColorFilterOn: true,  intensity: 0.25, tint: 43.2, brightness: 0.95),
+        ColorKeyframe(minute: 19 * 60 + 30, isColorFilterOn: true,  intensity: 0.60, tint: 28.8, brightness: 0.70),
+        ColorKeyframe(minute: 20 * 60 + 30, isColorFilterOn: true,  intensity: 0.85, tint: 18.0, brightness: 0.50),
+        ColorKeyframe(minute: 21 * 60 + 30, isColorFilterOn: true,  intensity: 1.00, tint: 0.0,  brightness: 0.30)
+    ]
+
+    struct Settings {
+        /// 0 where the filter is off, so fading to or from an off keyframe passes the filter's lowest
+        /// intensity part way, and that's where the filter switches.
+        var intensity: Float
+        var tint: Float
+        var brightness: Float
+
+        /// The system filter bottoms out at its "Low" intensity, so below that the schedule switches it off
+        var isColorFilterOn: Bool { intensity >= ColorFilterManager.shared.intensityRange.lowerBound }
+        var filterIntensity: Float {
+            let intensityRange = ColorFilterManager.shared.intensityRange
+            return min(max(intensity, intensityRange.lowerBound), intensityRange.upperBound)
+        }
+
+        /// Roughly how white looks on screen with these settings, for the Schedule window's preview.
+        var previewColor: Color {
+            Color(hue: Double(tint) / 360, saturation: isColorFilterOn ? Double(filterIntensity) : 0, brightness: Double(brightness))
+        }
+    }
+
+    /// The settings `schedule` has reached `minute` minutes after midnight, or nil if it's empty.
+    static func settings(in schedule: [ColorKeyframe], at minute: Double) -> Settings? {
+        let keyframes = schedule.sorted { $0.minute < $1.minute }
+        guard !keyframes.isEmpty else { return nil }
+
+        // The keyframes either side of `minute`, either of which may be across midnight from it
+        let startIndex = keyframes.lastIndex { Double($0.minute) <= minute }
+        let start = keyframes[startIndex ?? keyframes.count - 1]
+        let end = keyframes[((startIndex ?? -1) + 1) % keyframes.count]
+        let startMinute = Double(start.minute) - (startIndex == nil ? 1440 : 0)
+        var endMinute = Double(end.minute)
+        if endMinute <= startMinute { endMinute += 1440 }
+        let progress = Float((minute - startMinute) / (endMinute - startMinute))
+
+        // An off keyframe's tint doesn't show, so fading to or from one holds the other one's tint,
+        // and the tint takes the short way round the hue circle, so red to pink doesn't pass through green
+        let startTint = start.isColorFilterOn || !end.isColorFilterOn ? start.tint : end.tint
+        let endTint = end.isColorFilterOn || !start.isColorFilterOn ? end.tint : start.tint
+        var tintChange = (endTint - startTint).truncatingRemainder(dividingBy: 360)
+        if tintChange > 180 { tintChange -= 360 } else if tintChange < -180 { tintChange += 360 }
+        var tint = (startTint + tintChange * progress).truncatingRemainder(dividingBy: 360)
+        if tint < 0 { tint += 360 }
+
+        let startIntensity = start.isColorFilterOn ? start.intensity : 0
+        let endIntensity = end.isColorFilterOn ? end.intensity : 0
+        return Settings(
+            intensity: startIntensity + (endIntensity - startIntensity) * progress,
+            tint: tint,
+            brightness: start.brightness + (end.brightness - start.brightness) * progress
+        )
+    }
 }
 
 // MARK: - 5. System Manager (Gamma & Hardware Brightness)
@@ -678,7 +938,14 @@ enum SystemStrings {
     // System Settings › Displays (Schedule is Night Shift's)
     static let brightness = lookup("Brightness", in: displaysSettings, english: "Brightness")
     static let schedule = lookup("Schedule", in: displaysSettings, english: "Schedule")
-    
+    static let customize = lookup("Customize…", in: displaysSettings, english: "Customize…")
+
+    // System Settings › Accessibility's buttons for lists, and System Settings › Control Center's Time
+    static let add = lookup("global.button.add", in: accessibilitySettings, english: "Add")
+    static let delete = lookup("global.button.delete", in: accessibilitySettings, english: "Delete")
+    static let restoreDefaults = lookup("keyboard.access.restoreDefaults", in: accessibilitySettings, english: "Restore Defaults")
+    static let time = lookup("Time", in: controlCenterSettings, english: "Time")
+
     // The title of Control Center's Display module, which this popover stands in for
     static let display = lookup("Display", table: "Display", in: controlCenter, english: "Display")
     
