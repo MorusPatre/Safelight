@@ -24,7 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "Display Filters")
+            button.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: SystemStrings.display)
             button.action = #selector(togglePopover(_:))
         }
         
@@ -59,10 +59,10 @@ struct MenuView: View {
             
             // --- HEADER & AUTO TOGGLE ---
             HStack {
-                Text("Display Controls")
+                Text(SystemStrings.display)
                     .font(.headline)
                 Spacer()
-                Toggle("Auto Schedule", isOn: $controller.isAutoMode)
+                Toggle(SystemStrings.schedule, isOn: $controller.isAutoMode)
                     .toggleStyle(.switch)
                     .controlSize(.small)
             }
@@ -141,9 +141,9 @@ struct MenuView: View {
                         .disabled(controller.isAutoMode)
 
                         HStack {
-                            Text("Dim").font(.system(size: 10)).foregroundColor(.secondary)
+                            Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
                             Spacer()
-                            Text("Max").font(.system(size: 10)).foregroundColor(.secondary)
+                            Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
                         }
                     }
                 }
@@ -657,14 +657,15 @@ class ColorFilterManager {
 }
 
 // MARK: - 7. System Strings (System Settings' Translations)
-/// Labels this app shares with System Settings, read from the string tables System Settings (and
-/// AppKit) load them from, so they come out in the system language and worded exactly as there.
+/// Every label in the app, read from the string tables System Settings (or Control Center, or
+/// AppKit) loads the same label from, so it comes out in the system language, worded exactly as there.
 /// Each keeps its English text as a fallback in case a table ever moves or drops the key.
 enum SystemStrings {
     private static let accessibilitySettings = "/System/Library/ExtensionKit/Extensions/AccessibilitySettingsExtension.appex"
     private static let displaysSettings = "/System/Library/ExtensionKit/Extensions/DisplaysExt.appex"
     private static let controlCenterSettings = "/System/Library/ExtensionKit/Extensions/ControlCenterSettings.appex"
     private static let appKit = "/System/Library/Frameworks/AppKit.framework"
+    private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
     
     // System Settings › Accessibility › Display › Color Filters
     static let colorFilters = lookup("display.colorFilter.enable", in: accessibilitySettings, english: "Color filters")
@@ -673,8 +674,12 @@ enum SystemStrings {
     static let high = lookup("display.colorFilter.intensity.high", in: accessibilitySettings, english: "High")
     static let tint = lookup("display.colorFilter.tint", in: accessibilitySettings, english: "Tint")
     
-    // System Settings › Displays
+    // System Settings › Displays (Schedule is Night Shift's)
     static let brightness = lookup("Brightness", in: displaysSettings, english: "Brightness")
+    static let schedule = lookup("Schedule", in: displaysSettings, english: "Schedule")
+    
+    // The title of Control Center's Display module, which this popover stands in for
+    static let display = lookup("Display", table: "Display", in: controlCenter, english: "Display")
     
     // System Settings › Control Center's Reset button, and AppKit's Quit button
     static let reset = lookup("Reset", in: controlCenterSettings, english: "Reset")
