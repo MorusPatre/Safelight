@@ -61,6 +61,7 @@ struct MenuView: View {
             HStack {
                 Text(SystemStrings.display)
                     .font(.headline)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Toggle(SystemStrings.schedule, isOn: $controller.isAutoMode)
                     .toggleStyle(.switch)
