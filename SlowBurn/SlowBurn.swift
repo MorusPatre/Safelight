@@ -187,23 +187,23 @@ struct MenuView: View {
 
 // MARK: - Tint Slider (System Settings' Hue Slider)
 /// The control System Settings › Accessibility › Display uses for Color Tint's Tint slider (its
-/// `HueSliderRepresentable`), set up the same way: AppKit's `NSColorScaleSlider` (not in the public
-/// headers) over 0–360° with its track drawn as a hue scale, and a single tick mark at 180° that the
-/// slider snaps to on its own, like any NSSlider with tick marks.
+/// `HueSliderRepresentable`), set up the same way: a `HueSlider` over 0–360° with its track drawn as
+/// a hue scale, and a single tick mark at 180° that the slider snaps to on its own, like any NSSlider
+/// with tick marks.
 struct TintSlider: NSViewRepresentable {
     @Binding var value: Float // degrees
+    /// Like `Slider`'s: called with true when the slider is pressed, and with false when it's let go.
+    var onEditingChanged: (Bool) -> Void = { _ in }
 
-    /// A plain slider stands in if AppKit ever stops shipping `NSColorScaleSlider`.
-    private static let sliderClass = (NSClassFromString("NSColorScaleSlider") as? NSSlider.Type) ?? NSSlider.self
-    /// `NSColorScaleSlider`'s scale type for a hue track.
+    /// `NSColorScaleSliderCell`'s scale type for a hue track.
     private static let hueScaleType = 7
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> NSSlider {
-        let slider = Self.sliderClass.init(
+    func makeNSView(context: Context) -> HueSlider {
+        let slider = HueSlider(
             value: 360, minValue: 0, maxValue: 360,
             target: context.coordinator, action: #selector(Coordinator.valueDidChange(_:))
         )
@@ -213,15 +213,16 @@ struct TintSlider: NSViewRepresentable {
         slider.tickMarkPosition = .above
         slider.isContinuous = true
         slider.altIncrementValue = 1
-        if slider.responds(to: NSSelectorFromString("setDrawsTrackAsColorScaleType:")) {
-            slider.setValue(NSColor.red, forKey: "color")
-            slider.setValue(Self.hueScaleType, forKey: "drawsTrackAsColorScaleType")
+        if let cell = slider.cell, cell.responds(to: NSSelectorFromString("setDrawsTrackAsColorScaleType:")) {
+            cell.setValue(NSColor.red, forKey: "color")
+            cell.setValue(Self.hueScaleType, forKey: "drawsTrackAsColorScaleType")
         }
         return slider
     }
 
-    func updateNSView(_ slider: NSSlider, context: Context) {
+    func updateNSView(_ slider: HueSlider, context: Context) {
         context.coordinator.valueDidChangeHandler = { value = Float($0) }
+        slider.onEditingChanged = onEditingChanged
         slider.doubleValue = Double(value)
         slider.isEnabled = context.environment.isEnabled
     }
@@ -232,6 +233,31 @@ struct TintSlider: NSViewRepresentable {
         @objc func valueDidChange(_ sender: NSSlider) {
             valueDidChangeHandler(sender.doubleValue)
         }
+    }
+}
+
+/// AppKit's `NSColorScaleSlider` (not in the public headers), rebuilt from its parts so it can say when
+/// it's pressed and let go: that class is an NSSlider whose cell, `NSColorScaleSliderCell`, draws the
+/// track and takes the settings the slider passes on, with these alignment insets. A plain slider
+/// stands in if AppKit ever stops shipping the cell.
+final class HueSlider: NSSlider {
+    private static let colorScaleCellClass = NSClassFromString("NSColorScaleSliderCell") as? NSSliderCell.Type
+
+    var onEditingChanged: (Bool) -> Void = { _ in }
+
+    override class var cellClass: AnyClass? {
+        get { colorScaleCellClass ?? super.cellClass }
+        set { super.cellClass = newValue }
+    }
+
+    override var alignmentRectInsets: NSEdgeInsets {
+        Self.colorScaleCellClass == nil ? super.alignmentRectInsets : NSEdgeInsets(top: 1, left: 1, bottom: 4, right: 1)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onEditingChanged(true)
+        super.mouseDown(with: event) // tracks the mouse until it's let go
+        onEditingChanged(false)
     }
 }
 
@@ -296,21 +322,28 @@ struct ScheduleEditor: View {
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
 
+                            // Holding any of the sliders shows its keyframe on screen until it's let go
                             Slider(value: $keyframe.intensity, in: ColorFilterManager.shared.intensityRange) {
                                 Text(SystemStrings.intensity)
+                            } onEditingChanged: { isEditing in
+                                controller.preview(isEditing ? keyframe.id : nil)
                             }
                             .labelsHidden()
                             .tint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
                             .disabled(!keyframe.isColorFilterOn)
                             .frame(minWidth: 90)
 
-                            TintSlider(value: $keyframe.tint)
-                                .disabled(!keyframe.isColorFilterOn)
-                                .opacity(keyframe.isColorFilterOn ? 1.0 : 0.6)
-                                .frame(minWidth: 90)
+                            TintSlider(value: $keyframe.tint) { isEditing in
+                                controller.preview(isEditing ? keyframe.id : nil)
+                            }
+                            .disabled(!keyframe.isColorFilterOn)
+                            .opacity(keyframe.isColorFilterOn ? 1.0 : 0.6)
+                            .frame(minWidth: 90)
 
                             Slider(value: $keyframe.brightness, in: 0.0...1.0) {
                                 Text(SystemStrings.brightness)
+                            } onEditingChanged: { isEditing in
+                                controller.preview(isEditing ? keyframe.id : nil)
                             }
                             .labelsHidden()
                             .tint(.white)
@@ -417,6 +450,9 @@ class ColorController: ObservableObject {
     }
     
     var isUserDraggingSlider: Bool = false
+    /// The keyframe on screen while one of its sliders in the Schedule window is held down. Meanwhile
+    /// the settings above aren't written to the system or read back from it, so they're what comes back.
+    private var previewedKeyframeID: ColorKeyframe.ID?
     private var isSyncingWithSystem: Bool = false
     private var isSyncingColorFilter: Bool = false
     
@@ -435,6 +471,7 @@ class ColorController: ObservableObject {
                 UserDefaults.standard.set(data, forKey: Self.scheduleDefaultsKey)
             }
             applyAutoSettings()
+            showPreview()
         }
     }
 
@@ -480,7 +517,7 @@ class ColorController: ObservableObject {
     }
     
     func syncWithSystemBrightness() {
-        guard !isAutoMode, !isUserDraggingSlider else { 
+        guard !isAutoMode, !isUserDraggingSlider, previewedKeyframeID == nil else {
             targetSystemBrightness = nil
             return 
         }
@@ -609,6 +646,24 @@ class ColorController: ObservableObject {
         if sorted != schedule { schedule = sorted }
     }
 
+    /// Shows the keyframe with this ID on screen, following its edits, until this is called with nil,
+    /// which puts back the settings that were there before (or the Schedule's for now, if it's on).
+    func preview(_ id: ColorKeyframe.ID?) {
+        previewedKeyframeID = id
+        if id == nil {
+            updateColorFilter()
+            updateBrightness()
+        } else {
+            showPreview()
+        }
+    }
+
+    private func showPreview() {
+        guard let keyframe = schedule.first(where: { $0.id == previewedKeyframeID }) else { return }
+        ColorFilterManager.shared.write(ColorFilterManager.State(isOn: keyframe.isColorFilterOn, hue: keyframe.tint / 360, intensity: keyframe.intensity))
+        GammaManager.shared.setGamma(brightness: keyframe.brightness)
+    }
+
     /// Dragging Intensity or Tint turns the filter on, the way raising Intensity from zero used to.
     private func colorSliderChanged() {
         if !isColorFilterOn && !isAutoMode && !isSyncingColorFilter {
@@ -619,12 +674,12 @@ class ColorController: ObservableObject {
     }
     
     func updateColorFilter() {
-        guard !isSyncingColorFilter else { return }
+        guard !isSyncingColorFilter, previewedKeyframeID == nil else { return }
         ColorFilterManager.shared.write(ColorFilterManager.State(isOn: isColorFilterOn, hue: tint / 360, intensity: intensity))
     }
 
     func syncWithSystemColorFilter() {
-        guard let state = ColorFilterManager.shared.read() else { return }
+        guard previewedKeyframeID == nil, let state = ColorFilterManager.shared.read() else { return }
 
         isSyncingColorFilter = true
         if isColorFilterOn != state.isOn { isColorFilterOn = state.isOn }
@@ -634,6 +689,7 @@ class ColorController: ObservableObject {
     }
     
     func updateBrightness() {
+        guard previewedKeyframeID == nil else { return }
         GammaManager.shared.setGamma(brightness: brightness, skipHardwareUpdate: isSyncingWithSystem)
     }
     
