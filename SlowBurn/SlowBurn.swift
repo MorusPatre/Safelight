@@ -74,10 +74,10 @@ struct MenuView: View {
             VStack(spacing: 16) {
                 // 1. ON/OFF (the "Color filters" switch)
                 HStack {
-                    Text("Color Filter")
+                    Text("Color filters")
                         .fontWeight(.medium)
                     Spacer()
-                    Toggle("Color Filter", isOn: $controller.isColorFilterOn)
+                    Toggle("Color filters", isOn: $controller.isColorFilterOn)
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.small)
