@@ -728,14 +728,11 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
     var brightness: Float
 
     static let defaultSchedule: [ColorKeyframe] = [
-        ColorKeyframe(minute: 6 * 60,       isColorFilterOn: true,  intensity: 1.00, tint: 0.0,  brightness: 0.30),
-        ColorKeyframe(minute: 7 * 60,       isColorFilterOn: true,  intensity: 0.30, tint: 43.2, brightness: 0.85),
-        ColorKeyframe(minute: 8 * 60 + 30,  isColorFilterOn: false, intensity: 0.25, tint: 43.2, brightness: 1.00),
-        ColorKeyframe(minute: 15 * 60,      isColorFilterOn: false, intensity: 0.25, tint: 43.2, brightness: 1.00),
-        ColorKeyframe(minute: 17 * 60 + 30, isColorFilterOn: true,  intensity: 0.25, tint: 43.2, brightness: 0.95),
-        ColorKeyframe(minute: 19 * 60 + 30, isColorFilterOn: true,  intensity: 0.60, tint: 28.8, brightness: 0.70),
-        ColorKeyframe(minute: 20 * 60 + 30, isColorFilterOn: true,  intensity: 0.85, tint: 18.0, brightness: 0.50),
-        ColorKeyframe(minute: 21 * 60 + 30, isColorFilterOn: true,  intensity: 1.00, tint: 0.0,  brightness: 0.30)
+        ColorKeyframe(minute: 5 * 60 + 45,  isColorFilterOn: true,  intensity: 0.35, tint: 0,   brightness: 0.82),
+        ColorKeyframe(minute: 6 * 60,       isColorFilterOn: false, intensity: 0.25, tint: 180, brightness: 1.00),
+        ColorKeyframe(minute: 18 * 60 + 45, isColorFilterOn: false, intensity: 0.25, tint: 180, brightness: 1.00),
+        ColorKeyframe(minute: 19 * 60,      isColorFilterOn: true,  intensity: 0.46, tint: 0,   brightness: 0.92),
+        ColorKeyframe(minute: 20 * 60 + 30, isColorFilterOn: true,  intensity: 0.78, tint: 0,   brightness: 0.68)
     ]
 
     struct Settings {
