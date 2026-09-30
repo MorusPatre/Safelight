@@ -93,7 +93,7 @@ struct MenuView: View {
                     
                     VStack(spacing: 2) {
                         Slider(value: $controller.intensity, in: ColorFilterManager.shared.intensityRange)
-                            .tint(Color(hue: Double(controller.tint), saturation: 1.0, brightness: 1.0))
+                            .tint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
                             .disabled(controller.isAutoMode)
                         
                         HStack {
@@ -169,72 +169,53 @@ struct MenuView: View {
     }
 }
 
-// MARK: - Custom Tint Slider (Rainbow Track)
-struct TintSlider: View {
-    @Binding var value: Float
-    
-    var body: some View {
-        GeometryReader { geometry in
-            let thumbWidth: CGFloat = 8
-            let thumbHeight: CGFloat = 20
-            let trackHeight: CGFloat = 12
-            let trackWidth = geometry.size.width - thumbWidth
-            
-            ZStack(alignment: .leading) {
-                LinearGradient(
-                    colors:[
-                        Color(hue: 0.0, saturation: 1.0, brightness: 1.0),
-                        Color(hue: 1.0/6.0, saturation: 1.0, brightness: 1.0),
-                        Color(hue: 2.0/6.0, saturation: 1.0, brightness: 1.0),
-                        Color(hue: 3.0/6.0, saturation: 1.0, brightness: 1.0),
-                        Color(hue: 4.0/6.0, saturation: 1.0, brightness: 1.0),
-                        Color(hue: 5.0/6.0, saturation: 1.0, brightness: 1.0),
-                        Color(hue: 1.0, saturation: 1.0, brightness: 1.0)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(height: trackHeight)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(Color(white: 0.3), lineWidth: 1))
-                .overlay(
-                    Rectangle()
-                        .fill(Color.white)
-                        .frame(width: 2, height: 3)
-                        .offset(y: -2.5),
-                    alignment: .top
-                )
-                
-                Capsule()
-                    .fill(Color(white: 0.6))
-                    .shadow(color: .black.opacity(0.4), radius: 1, x: 0, y: 1)
-                    .frame(width: thumbWidth, height: thumbHeight)
-                    .offset(x: CGFloat(value) * trackWidth)
-            }
-            .frame(maxHeight: .infinity, alignment: .center)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { gesture in
-                        let dragX = gesture.location.x - (thumbWidth / 2)
-                        let rawValue = dragX / trackWidth
-                        var newValue = min(max(rawValue, 0), 1)
-                        
-                        let centerValue: CGFloat = 0.5
-                        let snapThreshold: CGFloat = 0.0225
-                        
-                        if abs(newValue - centerValue) < snapThreshold {
-                            if value != Float(centerValue) {
-                                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-                            }
-                            newValue = centerValue
-                        }
-                        
-                        value = Float(newValue)
-                    }
-            )
+// MARK: - Tint Slider (System Settings' Hue Slider)
+/// The control System Settings › Accessibility › Display uses for Color Tint's Tint slider (its
+/// `HueSliderRepresentable`), set up the same way: AppKit's `NSColorScaleSlider` (not in the public
+/// headers) over 0–360° with its track drawn as a hue scale, and a single tick mark at 180° that the
+/// slider snaps to on its own, like any NSSlider with tick marks.
+struct TintSlider: NSViewRepresentable {
+    @Binding var value: Float // degrees
+
+    /// A plain slider stands in if AppKit ever stops shipping `NSColorScaleSlider`.
+    private static let sliderClass = (NSClassFromString("NSColorScaleSlider") as? NSSlider.Type) ?? NSSlider.self
+    /// `NSColorScaleSlider`'s scale type for a hue track.
+    private static let hueScaleType = 7
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSSlider {
+        let slider = Self.sliderClass.init(
+            value: 360, minValue: 0, maxValue: 360,
+            target: context.coordinator, action: #selector(Coordinator.valueDidChange(_:))
+        )
+        slider.controlSize = .small
+        slider.numberOfTickMarks = 1
+        slider.allowsTickMarkValuesOnly = false
+        slider.tickMarkPosition = .above
+        slider.isContinuous = true
+        slider.altIncrementValue = 1
+        if slider.responds(to: NSSelectorFromString("setDrawsTrackAsColorScaleType:")) {
+            slider.setValue(NSColor.red, forKey: "color")
+            slider.setValue(Self.hueScaleType, forKey: "drawsTrackAsColorScaleType")
         }
-        .frame(height: 20)
+        return slider
+    }
+
+    func updateNSView(_ slider: NSSlider, context: Context) {
+        context.coordinator.valueDidChangeHandler = { value = Float($0) }
+        slider.doubleValue = Double(value)
+        slider.isEnabled = context.environment.isEnabled
+    }
+
+    final class Coordinator: NSObject {
+        var valueDidChangeHandler: (Double) -> Void = { _ in }
+
+        @objc func valueDidChange(_ sender: NSSlider) {
+            valueDidChangeHandler(sender.doubleValue)
+        }
     }
 }
 
@@ -242,8 +223,8 @@ struct TintSlider: View {
 class ColorController: ObservableObject {
     static let shared = ColorController()
     
-    // Mirror of the system Color Tint filter: `intensity` and `tint` are the exact values
-    // System Settings stores (tint is its 0–360° Tint slider divided by 360).
+    // Mirror of the system Color Tint filter, kept the way System Settings keeps it: `intensity` is
+    // the value the system stores, and `tint` is in degrees (0–360), stored as degrees / 360.
     @Published var isColorFilterOn: Bool = false { didSet { updateColorFilter() } }
     @Published var intensity: Float = 1.0 { didSet { colorSliderChanged() } }
     @Published var tint: Float = 0.0      { didSet { colorSliderChanged() } }
@@ -265,16 +246,16 @@ class ColorController: ObservableObject {
     private var syncTimer: Timer?
     
     private let schedule: [ColorKeyframe] = [
-        ColorKeyframe(hour: 0.0,  tint: 0.00, intensity: 1.00, brightness: 0.30),
-        ColorKeyframe(hour: 6.0,  tint: 0.00, intensity: 1.00, brightness: 0.30),
-        ColorKeyframe(hour: 7.0,  tint: 0.12, intensity: 0.30, brightness: 0.85),
-        ColorKeyframe(hour: 8.5,  tint: 0.50, intensity: 0.00, brightness: 1.00),
-        ColorKeyframe(hour: 15.0, tint: 0.50, intensity: 0.00, brightness: 1.00),
-        ColorKeyframe(hour: 17.5, tint: 0.12, intensity: 0.20, brightness: 0.95),
-        ColorKeyframe(hour: 19.5, tint: 0.08, intensity: 0.60, brightness: 0.70),
-        ColorKeyframe(hour: 20.5, tint: 0.05, intensity: 0.85, brightness: 0.50),
-        ColorKeyframe(hour: 21.5, tint: 0.00, intensity: 1.00, brightness: 0.30),
-        ColorKeyframe(hour: 24.0, tint: 0.00, intensity: 1.00, brightness: 0.30)
+        ColorKeyframe(hour: 0.0,  tint: 0.0,   intensity: 1.00, brightness: 0.30),
+        ColorKeyframe(hour: 6.0,  tint: 0.0,   intensity: 1.00, brightness: 0.30),
+        ColorKeyframe(hour: 7.0,  tint: 43.2,  intensity: 0.30, brightness: 0.85),
+        ColorKeyframe(hour: 8.5,  tint: 180.0, intensity: 0.00, brightness: 1.00),
+        ColorKeyframe(hour: 15.0, tint: 180.0, intensity: 0.00, brightness: 1.00),
+        ColorKeyframe(hour: 17.5, tint: 43.2,  intensity: 0.20, brightness: 0.95),
+        ColorKeyframe(hour: 19.5, tint: 28.8,  intensity: 0.60, brightness: 0.70),
+        ColorKeyframe(hour: 20.5, tint: 18.0,  intensity: 0.85, brightness: 0.50),
+        ColorKeyframe(hour: 21.5, tint: 0.0,   intensity: 1.00, brightness: 0.30),
+        ColorKeyframe(hour: 24.0, tint: 0.0,   intensity: 1.00, brightness: 0.30)
     ]
     
     init() {
@@ -436,15 +417,15 @@ class ColorController: ObservableObject {
     
     func updateColorFilter() {
         guard !isSyncingColorFilter else { return }
-        ColorFilterManager.shared.write(ColorFilterManager.State(isOn: isColorFilterOn, hue: tint, intensity: intensity))
+        ColorFilterManager.shared.write(ColorFilterManager.State(isOn: isColorFilterOn, hue: tint / 360, intensity: intensity))
     }
-    
+
     func syncWithSystemColorFilter() {
         guard let state = ColorFilterManager.shared.read() else { return }
-        
+
         isSyncingColorFilter = true
         if isColorFilterOn != state.isOn { isColorFilterOn = state.isOn }
-        if abs(tint - state.hue) > 0.0001 { tint = state.hue }
+        if abs(tint - state.hue * 360) > 0.0001 { tint = state.hue * 360 }
         if abs(intensity - state.intensity) > 0.0001 { intensity = state.intensity }
         isSyncingColorFilter = false
     }
