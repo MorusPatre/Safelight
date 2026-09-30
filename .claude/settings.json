@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "active=$(jq -r '.stop_hook_active // false'); \"$CLAUDE_PROJECT_DIR/scripts/run.sh\" --if-changed || { [ \"$active\" = true ] && exit 1 || exit 2; }",
+            "timeout": 300,
+            "statusMessage": "Rebuilding and relaunching SlowBurn…"
+          }
+        ]
+      }
+    ]
+  }
+}
