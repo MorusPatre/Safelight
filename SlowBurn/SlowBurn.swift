@@ -263,27 +263,21 @@ final class HueSlider: NSSlider {
 
 // MARK: - Schedule Window
 /// The window the gear button next to the Schedule switch opens.
-final class ScheduleWindow: NSObject, NSWindowDelegate {
+final class ScheduleWindow {
     static let shared = ScheduleWindow()
     private var window: NSWindow?
 
     func show() {
-        ColorController.shared.sortSchedule()
         if window == nil {
             let window = NSWindow(contentViewController: NSHostingController(rootView: ScheduleEditor()))
             window.title = SystemStrings.schedule
             window.isReleasedWhenClosed = false
-            window.delegate = self
             window.setContentSize(NSSize(width: 760, height: 600))
             window.center()
             self.window = window
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        ColorController.shared.sortSchedule()
     }
 }
 
@@ -312,7 +306,7 @@ struct ScheduleEditor: View {
                         Divider()
 
                         GridRow {
-                            DatePicker(SystemStrings.time, selection: Self.time(of: $keyframe), displayedComponents: .hourAndMinute)
+                            DatePicker(SystemStrings.time, selection: time(of: keyframe.id), displayedComponents: .hourAndMinute)
                                 .labelsHidden()
                                 .datePickerStyle(.stepperField)
                                 .environment(\.timeZone, Self.utc)
@@ -382,10 +376,17 @@ struct ScheduleEditor: View {
     // changes to skip or repeat a time, so every time reads back as it was set.
     private static let utc = TimeZone(identifier: "UTC")!
 
-    private static func time(of keyframe: Binding<ColorKeyframe>) -> Binding<Date> {
+    // Setting a time slides its row to its new place, so the keyframe is found by its ID, not by the
+    // place it had when the row was drawn.
+    private func time(of id: ColorKeyframe.ID) -> Binding<Date> {
         Binding(
-            get: { Date(timeIntervalSinceReferenceDate: Double(keyframe.wrappedValue.minute) * 60) },
-            set: { keyframe.wrappedValue.minute = (Int(($0.timeIntervalSinceReferenceDate / 60).rounded(.down)) % 1440 + 1440) % 1440 }
+            get: { Date(timeIntervalSinceReferenceDate: Double(controller.schedule.first { $0.id == id }?.minute ?? 0) * 60) },
+            set: { date in
+                guard let index = controller.schedule.firstIndex(where: { $0.id == id }) else { return }
+                withAnimation {
+                    controller.schedule[index].minute = (Int((date.timeIntervalSinceReferenceDate / 60).rounded(.down)) % 1440 + 1440) % 1440
+                }
+            }
         )
     }
 }
@@ -463,10 +464,12 @@ class ColorController: ObservableObject {
     private var timer: Timer?
     private var syncTimer: Timer?
 
-    /// The Schedule's keyframes, saved as they're edited. They're kept in the order they were edited
-    /// in until `sortSchedule()`, so a row in the Schedule window doesn't move while its time is typed.
+    /// The Schedule's keyframes in time order, saved as they're edited. A keyframe whose time changes
+    /// moves to its new place at once, and its row in the Schedule window with it.
     @Published var schedule: [ColorKeyframe] = ColorController.loadSchedule() {
         didSet {
+            let sorted = schedule.sorted { $0.minute < $1.minute }
+            if sorted != schedule { schedule = sorted }
             if let data = try? JSONEncoder().encode(schedule) {
                 UserDefaults.standard.set(data, forKey: Self.scheduleDefaultsKey)
             }
@@ -481,7 +484,7 @@ class ColorController: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: scheduleDefaultsKey),
               let schedule = try? JSONDecoder().decode([ColorKeyframe].self, from: data),
               !schedule.isEmpty else { return ColorKeyframe.defaultSchedule }
-        return schedule
+        return schedule.sorted { $0.minute < $1.minute }
     }
 
     init() {
@@ -628,7 +631,6 @@ class ColorController: ObservableObject {
             tint: settings.tint,
             brightness: settings.brightness
         ))
-        sortSchedule()
     }
 
     /// The schedule always keeps at least one keyframe.
@@ -639,11 +641,6 @@ class ColorController: ObservableObject {
 
     func restoreDefaultSchedule() {
         schedule = ColorKeyframe.defaultSchedule
-    }
-
-    func sortSchedule() {
-        let sorted = schedule.sorted { $0.minute < $1.minute }
-        if sorted != schedule { schedule = sorted }
     }
 
     /// Shows the keyframe with this ID on screen, following its edits, until this is called with nil,
