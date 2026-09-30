@@ -57,13 +57,13 @@ struct MenuView: View {
     var body: some View {
         VStack(spacing: 20) {
             
-            // --- HEADER & AUTO TOGGLE ---
+            // --- AUTO TOGGLE ---
             HStack {
-                Text(SystemStrings.display)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+                Text(SystemStrings.schedule)
+                    .fontWeight(.medium)
                 Spacer()
                 Toggle(SystemStrings.schedule, isOn: $controller.isAutoMode)
+                    .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.small)
             }
