@@ -263,21 +263,32 @@ final class HueSlider: NSSlider {
 
 // MARK: - Schedule Window
 /// The window the gear button next to the Schedule switch opens.
-final class ScheduleWindow {
+final class ScheduleWindow: NSObject, NSWindowDelegate {
     static let shared = ScheduleWindow()
     private var window: NSWindow?
 
     func show() {
         if window == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: ScheduleEditor()))
+            // The window can't be resized: it takes the editor's size, and follows it as rows come and go
+            let hostingController = NSHostingController(rootView: ScheduleEditor())
+            hostingController.sizingOptions = [.minSize, .maxSize]
+            let window = NSWindow(contentViewController: hostingController)
+            window.styleMask.remove(.resizable)
             window.title = SystemStrings.schedule
             window.isReleasedWhenClosed = false
-            window.setContentSize(NSSize(width: 760, height: 600))
+            window.delegate = self
+            window.setContentSize(hostingController.sizeThatFits(in: window.contentMaxSize)) // so it's centred at its size
             window.center()
             self.window = window
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    // The window grows downwards as rows are added, so one near the bottom of the screen moves up to stay on it
+    func windowDidResize(_ notification: Notification) {
+        guard let window, let visibleFrame = window.screen?.visibleFrame, window.frame.minY < visibleFrame.minY else { return }
+        window.setFrameOrigin(NSPoint(x: window.frame.minX, y: visibleFrame.minY))
     }
 }
 
@@ -369,7 +380,15 @@ struct ScheduleEditor: View {
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(width: 760)
+        .frame(maxHeight: maxHeight)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // As tall as its rows, until the window fills the height of the screen, and then they scroll
+    private var maxHeight: CGFloat {
+        guard let screen = NSScreen.main else { return .infinity }
+        return NSWindow.contentRect(forFrameRect: screen.visibleFrame, styleMask: [.titled, .closable, .miniaturizable]).height
     }
 
     // Times of day are edited as times on the first day of 2001 in UTC, which has no daylight saving
