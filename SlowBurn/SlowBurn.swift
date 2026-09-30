@@ -66,8 +66,12 @@ struct MenuView: View {
                 Text(SystemStrings.schedule)
                     .fontWeight(.medium)
                 Spacer()
-                Button(SystemStrings.customize, action: customizeSchedule)
-                    .controlSize(.small)
+                Button(action: customizeSchedule) {
+                    Label(SystemStrings.customize, systemImage: "gearshape")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help(SystemStrings.customize)
                 Toggle(SystemStrings.schedule, isOn: $controller.isAutoMode)
                     .labelsHidden()
                     .toggleStyle(.switch)
@@ -232,7 +236,7 @@ struct TintSlider: NSViewRepresentable {
 }
 
 // MARK: - Schedule Window
-/// The window the Customize… button next to the Schedule switch opens.
+/// The window the gear button next to the Schedule switch opens.
 final class ScheduleWindow: NSObject, NSWindowDelegate {
     static let shared = ScheduleWindow()
     private var window: NSWindow?
