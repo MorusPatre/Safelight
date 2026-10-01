@@ -290,6 +290,15 @@ final class ScheduleWindow: NSObject, NSWindowDelegate {
         guard let window, let visibleFrame = window.screen?.visibleFrame, window.frame.minY < visibleFrame.minY else { return }
         window.setFrameOrigin(NSPoint(x: window.frame.minX, y: visibleFrame.minY))
     }
+
+    // Undo and Redo (⌘Z and ⇧⌘Z) in the window take back and put back changes to the schedule
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        ColorController.shared.scheduleUndoManager
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        ColorController.shared.endScheduleEdit()
+    }
 }
 
 /// The Schedule's keyframes, a row each, under a preview of the day they make.
@@ -401,9 +410,8 @@ struct ScheduleEditor: View {
         Binding(
             get: { Date(timeIntervalSinceReferenceDate: Double(controller.schedule.first { $0.id == id }?.minute ?? 0) * 60) },
             set: { date in
-                guard let index = controller.schedule.firstIndex(where: { $0.id == id }) else { return }
                 withAnimation {
-                    controller.schedule[index].minute = (Int((date.timeIntervalSinceReferenceDate / 60).rounded(.down)) % 1440 + 1440) % 1440
+                    controller.setMinute((Int((date.timeIntervalSinceReferenceDate / 60).rounded(.down)) % 1440 + 1440) % 1440, ofKeyframe: id)
                 }
             }
         )
@@ -489,6 +497,7 @@ class ColorController: ObservableObject {
         didSet {
             let sorted = schedule.sorted { $0.minute < $1.minute }
             if sorted != schedule { schedule = sorted }
+            registerUndo(toSchedule: oldValue)
             if let data = try? JSONEncoder().encode(schedule) {
                 UserDefaults.standard.set(data, forKey: Self.scheduleDefaultsKey)
             }
@@ -498,6 +507,19 @@ class ColorController: ObservableObject {
     }
 
     private static let scheduleDefaultsKey = "schedule"
+
+    /// Takes back and puts back changes to the schedule, for Undo and Redo in the Schedule window.
+    let scheduleUndoManager = UndoManager()
+
+    /// Changes that are undone in one go: the ones made while a slider is held, and the ones made to
+    /// one keyframe's time straight after each other.
+    private enum ScheduleEdit: Equatable {
+        case slider
+        case time(ColorKeyframe.ID)
+    }
+    private var timeEdit: ScheduleEdit?
+    /// The edit the last change to the schedule was part of, which the next change may carry on.
+    private var lastScheduleEdit: ScheduleEdit?
 
     private static func loadSchedule() -> [ColorKeyframe] {
         guard let data = UserDefaults.standard.data(forKey: scheduleDefaultsKey),
@@ -662,9 +684,39 @@ class ColorController: ObservableObject {
         schedule = ColorKeyframe.defaultSchedule
     }
 
+    /// Sets a keyframe's time. Setting the same keyframe's time again straight after is undone with it.
+    func setMinute(_ minute: Int, ofKeyframe id: ColorKeyframe.ID) {
+        guard let index = schedule.firstIndex(where: { $0.id == id }) else { return }
+        timeEdit = .time(id)
+        schedule[index].minute = minute
+        timeEdit = nil
+    }
+
+    /// Registers the way back from a change to the schedule, unless it carries on the edit the last
+    /// change was part of. Undoing puts `previous` back, which registers the way forward for Redo.
+    private func registerUndo(toSchedule previous: [ColorKeyframe]) {
+        // Putting the keyframes in time order sets the schedule a second time, which isn't a change of its own
+        guard schedule != previous.sorted(by: { $0.minute < $1.minute }) else { return }
+        let edit = previewedKeyframeID == nil ? timeEdit : .slider
+        defer { lastScheduleEdit = edit }
+        if let edit, edit == lastScheduleEdit { return }
+
+        scheduleUndoManager.registerUndo(withTarget: self) { controller in
+            // Rows that stay slide to the places their times put them back in, as they do when a time is set
+            let keepsRows = Set(previous.map(\.id)) == Set(controller.schedule.map(\.id))
+            withAnimation(keepsRows ? .default : nil) { controller.schedule = previous }
+        }
+    }
+
+    /// Makes the next change to the schedule one to undo by itself, whatever the last one was.
+    func endScheduleEdit() {
+        lastScheduleEdit = nil
+    }
+
     /// Shows the keyframe with this ID on screen, following its edits, until this is called with nil,
     /// which puts back the settings that were there before (or the Schedule's for now, if it's on).
     func preview(_ id: ColorKeyframe.ID?) {
+        endScheduleEdit() // each hold of a slider is undone by itself
         previewedKeyframeID = id
         if id == nil {
             updateColorFilter()
