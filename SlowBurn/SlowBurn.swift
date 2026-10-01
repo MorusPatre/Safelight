@@ -381,6 +381,28 @@ struct ScheduleEditor: View {
                     Button(SystemStrings.restoreDefaults) {
                         controller.restoreDefaultSchedule()
                     }
+
+                    // The Edit menu's Undo and Redo. Whatever changes which of them there is to do
+                    // changes the schedule as well, and that redraws them. Their symbols are set as
+                    // text, which makes the buttons as tall as the ones either side.
+                    Button {
+                        controller.scheduleUndoManager.undo()
+                    } label: {
+                        Text(Image(systemName: "arrow.uturn.backward"))
+                    }
+                    .help(SystemStrings.undo)
+                    .accessibilityLabel(SystemStrings.undo)
+                    .disabled(!controller.scheduleUndoManager.canUndo)
+
+                    Button {
+                        controller.scheduleUndoManager.redo()
+                    } label: {
+                        Text(Image(systemName: "arrow.uturn.forward"))
+                    }
+                    .help(SystemStrings.redo)
+                    .accessibilityLabel(SystemStrings.redo)
+                    .disabled(!controller.scheduleUndoManager.canRedo)
+
                     Spacer()
                     Button(SystemStrings.add) {
                         controller.addKeyframe()
@@ -1051,6 +1073,7 @@ enum SystemStrings {
     private static let displaysSettings = "/System/Library/ExtensionKit/Extensions/DisplaysExt.appex"
     private static let controlCenterSettings = "/System/Library/ExtensionKit/Extensions/ControlCenterSettings.appex"
     private static let appKit = "/System/Library/Frameworks/AppKit.framework"
+    private static let swiftUI = "/System/Library/Frameworks/SwiftUI.framework"
     private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
     
     // System Settings › Accessibility › Display › Color Filters
@@ -1070,6 +1093,10 @@ enum SystemStrings {
     static let delete = lookup("global.button.delete", in: accessibilitySettings, english: "Delete")
     static let restoreDefaults = lookup("keyboard.access.restoreDefaults", in: accessibilitySettings, english: "Restore Defaults")
     static let time = lookup("Time", in: controlCenterSettings, english: "Time")
+
+    // The Edit menu SwiftUI gives this app, whose Undo and Redo the Schedule window's buttons are
+    static let undo = lookup("Undo", table: "MainMenu", in: swiftUI, english: "Undo")
+    static let redo = lookup("Redo", table: "MainMenu", in: swiftUI, english: "Redo")
 
     // The title of Control Center's Display module, which this popover stands in for
     static let display = lookup("Display", table: "Display", in: controlCenter, english: "Display")
