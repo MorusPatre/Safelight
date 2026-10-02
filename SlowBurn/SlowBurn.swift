@@ -1223,7 +1223,8 @@ class AppearanceManager {
            let transition = transitionClass.perform(makeTransition)?.takeUnretainedValue() as? NSObject,
            transition.responds(to: postChange) {
             setTheme(isDark ? darkTheme : lightTheme, false)
-            typealias PostChange = @convention(c) (NSObject, Selector, UInt, @convention(block) () -> Void) -> Void
+            // The transition keeps the completion handler until the fade is over, so it has to be escaping
+            typealias PostChange = @convention(c) (NSObject, Selector, UInt, @escaping @convention(block) () -> Void) -> Void
             unsafeBitCast(transition.method(for: postChange), to: PostChange.self)(transition, postChange, 0, {})
         } else {
             setTheme(isDark ? darkTheme : lightTheme, true)
