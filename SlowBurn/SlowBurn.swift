@@ -166,8 +166,12 @@ struct MenuView: View {
                         .fontWeight(.medium)
                         .frame(minWidth: 75, alignment: .leading)
 
-                    AppearancePicker(isDark: $controller.isDarkAppearance)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    AppearancePicker(isDark: Binding(
+                        get: { controller.isDarkAppearance },
+                        set: { controller.chooseAppearance(isDark: $0) }
+                    ))
+                    .disabled(controller.isChangingAppearance)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
 
@@ -276,7 +280,8 @@ final class HueSlider: NSSlider {
 /// The Light and Dark of the picker in System Settings › Appearance (its `AppearanceThemePicker`, which
 /// comes with Auto and can't be had without it), rebuilt from its parts: System Settings' thumbnails,
 /// each over its shadow, with the highlight in it drawn in the accent colour, a ring in that colour around
-/// the one that's chosen, and its name underneath.
+/// the one that's chosen, and its name underneath. Disabled, it dims the way that picker does while the
+/// appearance is changing.
 struct AppearancePicker: View {
     @Binding var isDark: Bool
 
@@ -297,16 +302,14 @@ struct AppearancePicker: View {
         } label: {
             VStack(spacing: 1) {
                 Group {
-                    if let image = Self.artwork?.image(forResource: thumbnail) {
+                    if let artwork = Self.artwork, artwork.image(forResource: thumbnail) != nil {
+                        // Loaded by name: with `Image(nsImage:)` the picker's dimming takes 0.3 s longer to be over
                         ZStack {
-                            Image(nsImage: image)
+                            Image(thumbnail, bundle: artwork)
                                 .clipShape(RoundedRectangle(cornerRadius: 5))
-                                .shadow(color: .black.opacity(isSelected ? 0 : 0.33), radius: 2)
-                            if let highlight = Self.artwork?.image(forResource: "selectionColor_mask") {
-                                Image(nsImage: highlight)
-                                    .renderingMode(.template)
-                                    .foregroundStyle(Color.accentColor)
-                            }
+                            Image("selectionColor_mask", bundle: artwork)
+                                .renderingMode(.template)
+                                .foregroundStyle(Color.accentColor)
                         }
                     } else {
                         // A plain window colour stands in if System Settings ever stops shipping the thumbnails
@@ -323,6 +326,8 @@ struct AppearancePicker: View {
                             .strokeBorder(Color.accentColor, lineWidth: 3)
                     }
                 }
+                // Around a thumbnail with no ring, and behind either of them when the picker is dimmed
+                .shadow(color: .black.opacity(0.33), radius: isSelected ? 0 : 2)
 
                 Text(name)
                     .font(.subheadline)
@@ -572,7 +577,9 @@ class ColorController: ObservableObject {
     @Published var brightness: Float = 1.0 { didSet { updateBrightness() } }
 
     // Mirror of the system appearance: Dark or Light, whether it was chosen or Auto switched to it.
-    @Published var isDarkAppearance: Bool = false { didSet { updateAppearance() } }
+    @Published private(set) var isDarkAppearance: Bool = false
+    /// True from when an appearance is chosen here until the screen has changed over to it.
+    @Published private(set) var isChangingAppearance: Bool = false
     
     @Published var isAutoMode: Bool = false {
         didSet { if isAutoMode { applyAutoSettings() } }
@@ -584,7 +591,6 @@ class ColorController: ObservableObject {
     private var previewedKeyframeID: ColorKeyframe.ID?
     private var isSyncingWithSystem: Bool = false
     private var isSyncingColorFilter: Bool = false
-    private var isSyncingAppearance: Bool = false
     
     private var targetSystemBrightness: Float? = nil
     private var lastSystemBrightness: Float = -1.0
@@ -871,17 +877,31 @@ class ColorController: ObservableObject {
         GammaManager.shared.setGamma(brightness: brightness, skipHardwareUpdate: isSyncingWithSystem)
     }
 
-    func updateAppearance() {
-        guard !isSyncingAppearance else { return }
-        AppearanceManager.shared.setDark(isDarkAppearance)
+    /// Chooses Light or Dark in System Settings' order: the choice shows at once, the picker dims, and
+    /// only when it has does the screen change over, after which the picker comes back. The screen
+    /// fades from a picture of itself, so the choice has to be showing before that's taken, or it only
+    /// appears as the fade ends. Choices made before the screen has changed over are ignored.
+    func chooseAppearance(isDark: Bool) {
+        guard !isChangingAppearance else { return }
+        guard isDark != isDarkAppearance else {
+            AppearanceManager.shared.setDark(isDark) // nothing to change over to, but this turns Auto off
+            return
+        }
+
+        isDarkAppearance = isDark
+        withAnimation(.default, completionCriteria: .logicallyComplete) {
+            isChangingAppearance = true
+        } completion: { [weak self] in
+            AppearanceManager.shared.setDark(isDark) {
+                self?.isChangingAppearance = false
+                self?.syncWithSystemAppearance()
+            }
+        }
     }
 
     func syncWithSystemAppearance() {
-        guard let isDark = AppearanceManager.shared.isDark() else { return }
-
-        isSyncingAppearance = true
+        guard !isChangingAppearance, let isDark = AppearanceManager.shared.isDark() else { return }
         if isDarkAppearance != isDark { isDarkAppearance = isDark }
-        isSyncingAppearance = false
     }
     
     func reset() {
@@ -1203,14 +1223,14 @@ class AppearanceManager {
     }
 
     /// Choosing Light or Dark turns Auto off, as it does in System Settings, even if that's what Auto
-    /// has it set to already.
-    func setDark(_ isDark: Bool) {
-        guard let current = self.isDark(), let setTheme = setThemeFunc else { return }
+    /// has it set to already. `completion` is called on the main thread once the screen has changed over.
+    func setDark(_ isDark: Bool, completion: @escaping () -> Void = {}) {
+        guard let current = self.isDark(), let setTheme = setThemeFunc else { return completion() }
 
         if getSwitchesAutomaticallyFunc?() == true {
             setSwitchesAutomaticallyFunc?(false)
         }
-        guard isDark != current else { return }
+        guard isDark != current else { return completion() }
 
         // System Settings' steps: `NSGlobalPreferenceTransition` (not in the public headers) takes a
         // picture of the screen, the appearance is set without telling anyone, and then the transition
@@ -1225,9 +1245,12 @@ class AppearanceManager {
             setTheme(isDark ? darkTheme : lightTheme, false)
             // The transition keeps the completion handler until the fade is over, so it has to be escaping
             typealias PostChange = @convention(c) (NSObject, Selector, UInt, @escaping @convention(block) () -> Void) -> Void
-            unsafeBitCast(transition.method(for: postChange), to: PostChange.self)(transition, postChange, 0, {})
+            unsafeBitCast(transition.method(for: postChange), to: PostChange.self)(transition, postChange, 0) {
+                DispatchQueue.main.async(execute: completion)
+            }
         } else {
             setTheme(isDark ? darkTheme : lightTheme, true)
+            completion()
         }
     }
 }
