@@ -158,6 +158,17 @@ struct MenuView: View {
                         }
                     }
                 }
+
+                // --- APPEARANCE SECTION ---
+                // This drives System Settings › Appearance (Light and Dark). The Schedule leaves it alone.
+                GridRow(alignment: .top) {
+                    Text(SystemStrings.appearance)
+                        .fontWeight(.medium)
+                        .frame(minWidth: 75, alignment: .leading)
+
+                    AppearancePicker(isDark: $controller.isDarkAppearance)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
 
             Divider()
@@ -258,6 +269,71 @@ final class HueSlider: NSSlider {
         onEditingChanged(true)
         super.mouseDown(with: event) // tracks the mouse until it's let go
         onEditingChanged(false)
+    }
+}
+
+// MARK: - Appearance Picker (System Settings' Appearance Thumbnails)
+/// The Light and Dark of the picker in System Settings › Appearance (its `AppearanceThemePicker`, which
+/// comes with Auto and can't be had without it), rebuilt from its parts: System Settings' thumbnails,
+/// each over its shadow, with the highlight in it drawn in the accent colour, a ring in that colour around
+/// the one that's chosen, and its name underneath.
+struct AppearancePicker: View {
+    @Binding var isDark: Bool
+
+    private static let artwork = Bundle(path: SystemStrings.appearanceSettings)
+    private static let thumbnailSize = CGSize(width: 67, height: 44)
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            option(SystemStrings.light, thumbnail: "AppearanceLight", isDark: false)
+            option(SystemStrings.dark, thumbnail: "AppearanceDark", isDark: true)
+        }
+    }
+
+    private func option(_ name: String, thumbnail: String, isDark: Bool) -> some View {
+        let isSelected = self.isDark == isDark
+        return Button {
+            self.isDark = isDark
+        } label: {
+            VStack(spacing: 1) {
+                Group {
+                    if let image = Self.artwork?.image(forResource: thumbnail) {
+                        ZStack {
+                            Image(nsImage: image)
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                .shadow(color: .black.opacity(isSelected ? 0 : 0.33), radius: 2)
+                            if let highlight = Self.artwork?.image(forResource: "selectionColor_mask") {
+                                Image(nsImage: highlight)
+                                    .renderingMode(.template)
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                    } else {
+                        // A plain window colour stands in if System Settings ever stops shipping the thumbnails
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color(white: isDark ? 0.15 : 0.95))
+                            .strokeBorder(.separator)
+                    }
+                }
+                .frame(width: Self.thumbnailSize.width, height: Self.thumbnailSize.height)
+                .padding(3.5)
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Color.accentColor, lineWidth: 3)
+                    }
+                }
+
+                Text(name)
+                    .font(.subheadline)
+                    .fontWeight(isSelected ? .semibold : .regular)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .fixedSize()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -494,6 +570,9 @@ class ColorController: ObservableObject {
     @Published var intensity: Float = 1.0 { didSet { colorSliderChanged() } }
     @Published var tint: Float = 0.0      { didSet { colorSliderChanged() } }
     @Published var brightness: Float = 1.0 { didSet { updateBrightness() } }
+
+    // Mirror of the system appearance: Dark or Light, whether it was chosen or Auto switched to it.
+    @Published var isDarkAppearance: Bool = false { didSet { updateAppearance() } }
     
     @Published var isAutoMode: Bool = false {
         didSet { if isAutoMode { applyAutoSettings() } }
@@ -505,6 +584,7 @@ class ColorController: ObservableObject {
     private var previewedKeyframeID: ColorKeyframe.ID?
     private var isSyncingWithSystem: Bool = false
     private var isSyncingColorFilter: Bool = false
+    private var isSyncingAppearance: Bool = false
     
     private var targetSystemBrightness: Float? = nil
     private var lastSystemBrightness: Float = -1.0
@@ -569,6 +649,14 @@ class ColorController: ObservableObject {
             nil,
             .deliverImmediately
         )
+
+        // And the same for the appearance, which Auto changes at sunrise and sunset too
+        syncWithSystemAppearance()
+        DistributedNotificationCenter.default().addObserver(
+            forName: AppearanceManager.changedNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.syncWithSystemAppearance()
+        }
         
         timer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.applyAutoSettings()
@@ -781,6 +869,19 @@ class ColorController: ObservableObject {
     func updateBrightness() {
         guard previewedKeyframeID == nil else { return }
         GammaManager.shared.setGamma(brightness: brightness, skipHardwareUpdate: isSyncingWithSystem)
+    }
+
+    func updateAppearance() {
+        guard !isSyncingAppearance else { return }
+        AppearanceManager.shared.setDark(isDarkAppearance)
+    }
+
+    func syncWithSystemAppearance() {
+        guard let isDark = AppearanceManager.shared.isDark() else { return }
+
+        isSyncingAppearance = true
+        if isDarkAppearance != isDark { isDarkAppearance = isDark }
+        isSyncingAppearance = false
     }
     
     func reset() {
@@ -1064,7 +1165,73 @@ class ColorFilterManager {
     }
 }
 
-// MARK: - 7. System Strings (System Settings' Translations)
+// MARK: - 7. Appearance Manager (Light & Dark Appearance)
+/// Reads and sets the appearance in System Settings › Appearance. System Settings sets it through these
+/// SkyLight functions (exported, but not in the public headers), and has AppKit fade the whole screen
+/// from the old appearance to the new one.
+class AppearanceManager {
+    static let shared = AppearanceManager()
+
+    /// Distributed notification the system posts whenever the appearance changes.
+    static let changedNotification = Notification.Name("AppleInterfaceThemeChangedNotification")
+
+    // `SLSAppearanceTheme`'s two values
+    private let lightTheme: Int32 = 0
+    private let darkTheme: Int32 = 1
+
+    private var getThemeFunc: (@convention(c) () -> Int32)?
+    private var setThemeFunc: (@convention(c) (Int32, Bool) -> Void)?
+    private var getSwitchesAutomaticallyFunc: (@convention(c) () -> Bool)?
+    private var setSwitchesAutomaticallyFunc: (@convention(c) (Bool) -> Void)?
+
+    init() {
+        guard let handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY) else { return }
+
+        func load<T>(_ name: String, as type: T.Type) -> T? {
+            dlsym(handle, name).map { unsafeBitCast($0, to: type) }
+        }
+
+        getThemeFunc = load("SLSGetAppearanceThemeLegacy", as: (@convention(c) () -> Int32).self)
+        setThemeFunc = load("SLSSetAppearanceThemeNotifying", as: (@convention(c) (Int32, Bool) -> Void).self)
+        getSwitchesAutomaticallyFunc = load("SLSGetAppearanceThemeSwitchesAutomatically", as: (@convention(c) () -> Bool).self)
+        setSwitchesAutomaticallyFunc = load("SLSSetAppearanceThemeSwitchesAutomatically", as: (@convention(c) (Bool) -> Void).self)
+    }
+
+    /// Whether the appearance is Dark right now, which with Auto depends on the time of day.
+    func isDark() -> Bool? {
+        getThemeFunc.map { $0() == darkTheme }
+    }
+
+    /// Choosing Light or Dark turns Auto off, as it does in System Settings, even if that's what Auto
+    /// has it set to already.
+    func setDark(_ isDark: Bool) {
+        guard let current = self.isDark(), let setTheme = setThemeFunc else { return }
+
+        if getSwitchesAutomaticallyFunc?() == true {
+            setSwitchesAutomaticallyFunc?(false)
+        }
+        guard isDark != current else { return }
+
+        // System Settings' steps: `NSGlobalPreferenceTransition` (not in the public headers) takes a
+        // picture of the screen, the appearance is set without telling anyone, and then the transition
+        // tells every app and fades the picture out over them as they redraw. Without it, the
+        // appearance is set the plain way, and apps change over one by one.
+        let makeTransition = NSSelectorFromString("transition")
+        let postChange = NSSelectorFromString("postChangeNotification:completionHandler:")
+        if let transitionClass = NSClassFromString("NSGlobalPreferenceTransition") as? NSObject.Type,
+           transitionClass.responds(to: makeTransition),
+           let transition = transitionClass.perform(makeTransition)?.takeUnretainedValue() as? NSObject,
+           transition.responds(to: postChange) {
+            setTheme(isDark ? darkTheme : lightTheme, false)
+            typealias PostChange = @convention(c) (NSObject, Selector, UInt, @convention(block) () -> Void) -> Void
+            unsafeBitCast(transition.method(for: postChange), to: PostChange.self)(transition, postChange, 0, {})
+        } else {
+            setTheme(isDark ? darkTheme : lightTheme, true)
+        }
+    }
+}
+
+// MARK: - 8. System Strings (System Settings' Translations)
 /// Every label in the app, read from the string tables System Settings (or Control Center, or
 /// AppKit) loads the same label from, so it comes out in the system language, worded exactly as there.
 /// Each keeps its English text as a fallback in case a table ever moves or drops the key.
@@ -1072,6 +1239,8 @@ enum SystemStrings {
     private static let accessibilitySettings = "/System/Library/ExtensionKit/Extensions/AccessibilitySettingsExtension.appex"
     private static let displaysSettings = "/System/Library/ExtensionKit/Extensions/DisplaysExt.appex"
     private static let controlCenterSettings = "/System/Library/ExtensionKit/Extensions/ControlCenterSettings.appex"
+    /// Where `AppearancePicker` finds its thumbnails as well.
+    static let appearanceSettings = "/System/Library/ExtensionKit/Extensions/Appearance.appex"
     private static let appKit = "/System/Library/Frameworks/AppKit.framework"
     private static let swiftUI = "/System/Library/Frameworks/SwiftUI.framework"
     private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
@@ -1087,6 +1256,11 @@ enum SystemStrings {
     static let brightness = lookup("Brightness", in: displaysSettings, english: "Brightness")
     static let schedule = lookup("Schedule", in: displaysSettings, english: "Schedule")
     static let customize = lookup("Customize…", in: displaysSettings, english: "Customize…")
+
+    // System Settings › Appearance
+    static let appearance = lookup("Appearance", in: appearanceSettings, english: "Appearance")
+    static let light = lookup("Light", in: appearanceSettings, english: "Light")
+    static let dark = lookup("Dark", in: appearanceSettings, english: "Dark")
 
     // System Settings › Accessibility's buttons for lists, and System Settings › Control Center's Time
     static let add = lookup("global.button.add", in: accessibilitySettings, english: "Add")
