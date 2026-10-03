@@ -2,6 +2,7 @@ import SwiftUI
 import Cocoa
 import ApplicationServices
 import Foundation // Required for dynamic library loading
+import ServiceManagement
 
 // MARK: - 1. App Entry Point
 @main
@@ -25,7 +26,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: SystemStrings.display)
-            button.action = #selector(togglePopover(_:))
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         
         popover.contentSize = NSSize(width: 320, height: 260)
@@ -34,6 +36,58 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.popover.performClose(nil)
             ScheduleWindow.shared.show()
         }))
+    }
+    
+    /// A click opens the popover; a right-click or Control-click opens the menu instead.
+    @objc func statusItemClicked(_ sender: AnyObject?) {
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            showMenu()
+        } else {
+            togglePopover(sender)
+        }
+    }
+    
+    private func showMenu() {
+        popover.performClose(nil)
+        
+        let menu = NSMenu()
+        let openAtLogin = NSMenuItem(title: SystemStrings.openAtLogin, action: #selector(toggleOpenAtLogin(_:)), keyEquivalent: "")
+        openAtLogin.target = self
+        // Read each time, as it can also be changed in System Settings › General › Login Items.
+        openAtLogin.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(openAtLogin)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: SystemStrings.quitApp, action: #selector(quit(_:)), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+        
+        // Attached only while it's open, so a plain click still reaches the popover.
+        statusItem?.menu = menu
+        statusItem?.button?.performClick(nil)
+        statusItem?.menu = nil
+    }
+    
+    @objc private func toggleOpenAtLogin(_ sender: NSMenuItem) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            NSLog("SlowBurn: couldn't change Open at Login: \(error)")
+        }
+        // The user turned it off in Login Items before; only they can allow it again there.
+        if service.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+    }
+    
+    @objc func quit(_ sender: Any?) {
+        ColorController.shared.reset()
+        NSApplication.shared.terminate(nil)
     }
     
     @objc func togglePopover(_ sender: AnyObject?) {
@@ -1268,6 +1322,7 @@ enum SystemStrings {
     private static let appKit = "/System/Library/Frameworks/AppKit.framework"
     private static let swiftUI = "/System/Library/Frameworks/SwiftUI.framework"
     private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
+    private static let dock = "/System/Library/CoreServices/Dock.app"
     
     // System Settings › Accessibility › Display › Color Filters
     static let colorFilters = lookup("display.colorFilter.enable", in: accessibilitySettings, english: "Color filters")
@@ -1302,6 +1357,15 @@ enum SystemStrings {
     // System Settings › Control Center's Reset button, and AppKit's Quit button
     static let reset = lookup("Reset", in: controlCenterSettings, english: "Reset")
     static let quit = lookup("Quit", table: "Document", in: appKit, english: "Quit")
+    
+    // The status item's menu: the Dock's Options › Open at Login, and the app menu's Quit item
+    static let openAtLogin = lookup("OPEN_AT_LOGIN", table: "DockMenus", in: dock, english: "Open at Login")
+    static let quitApp = String(format: lookup("Quit %@", table: "MainMenu", in: swiftUI, english: "Quit %@"), appName)
+    private static var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? "SlowBurn"
+    }
     
     /// The user's preferred languages. This app has no translations of its own, so a plain
     /// `localizedString` lookup would follow the app into English; asking with these picks each
