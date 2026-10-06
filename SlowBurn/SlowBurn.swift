@@ -500,8 +500,8 @@ struct ScheduleEditor: View {
                             .frame(minWidth: 90)
 
                             Picker(SystemStrings.appearance, selection: $keyframe.isDarkAppearance) {
-                                Text(SystemStrings.light).tag(false)
-                                Text(SystemStrings.dark).tag(true)
+                                Image(nsImage: Self.lightSymbol).help(SystemStrings.light).tag(false)
+                                Image(nsImage: Self.darkSymbol).help(SystemStrings.dark).tag(true)
                             }
                             .labelsHidden()
                             .pickerStyle(.segmented)
@@ -564,6 +564,22 @@ struct ScheduleEditor: View {
     private var maxHeight: CGFloat {
         guard let screen = NSScreen.main else { return .infinity }
         return NSWindow.contentRect(forFrameRect: screen.visibleFrame, styleMask: [.titled, .closable, .miniaturizable]).height
+    }
+
+    // The symbols macOS has for Light and Dark, as in Control Center's Dark Mode control and in Notes.
+    // They aren't in the public set, so they're looked up the way AppKit looks up its own private ones,
+    // and given Light and Dark as their descriptions, which VoiceOver reads for the segments (theirs
+    // are "Light mode appearance circle" and so on). A sun and a moon stand in if they're ever gone.
+    private static let lightSymbol = appearanceSymbol("appearance.lightmode", standIn: "sun.max", description: SystemStrings.light)
+    private static let darkSymbol = appearanceSymbol("appearance.darkmode", standIn: "moon", description: SystemStrings.dark)
+
+    private static func appearanceSymbol(_ name: String, standIn: String, description: String) -> NSImage {
+        let lookup = NSSelectorFromString("imageWithPrivateSystemSymbolName:accessibilityDescription:")
+        if NSImage.responds(to: lookup),
+           let symbol = NSImage.perform(lookup, with: name, with: description)?.takeUnretainedValue() as? NSImage {
+            return symbol
+        }
+        return NSImage(systemSymbolName: standIn, accessibilityDescription: description) ?? NSImage()
     }
 
     // Times of day are edited as times on the first day of 2001 in UTC, which has no daylight saving
