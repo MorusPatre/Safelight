@@ -439,6 +439,7 @@ final class ScheduleWindow: NSObject, NSWindowDelegate {
 /// The Schedule's keyframes, a row each, under a preview of the day they make.
 struct ScheduleEditor: View {
     @ObservedObject var controller = ColorController.shared
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Form {
@@ -500,8 +501,12 @@ struct ScheduleEditor: View {
                             .frame(minWidth: 90)
 
                             Picker(SystemStrings.appearance, selection: $keyframe.isDarkAppearance) {
-                                Image(nsImage: Self.lightSymbol).help(SystemStrings.light).tag(false)
-                                Image(nsImage: Self.darkSymbol).help(SystemStrings.dark).tag(true)
+                                Image(nsImage: colorScheme == .dark ? Self.lightSymbolInverse : Self.lightSymbol)
+                                    .help(SystemStrings.light)
+                                    .tag(false)
+                                Image(nsImage: colorScheme == .dark ? Self.darkSymbolInverse : Self.darkSymbol)
+                                    .help(SystemStrings.dark)
+                                    .tag(true)
                             }
                             .labelsHidden()
                             .pickerStyle(.segmented)
@@ -566,12 +571,16 @@ struct ScheduleEditor: View {
         return NSWindow.contentRect(forFrameRect: screen.visibleFrame, styleMask: [.titled, .closable, .miniaturizable]).height
     }
 
-    // The symbols macOS has for Light and Dark, as in Control Center's Dark Mode control and in Notes.
+    // The symbols macOS has for Light and Dark, as in Control Center's Dark Mode control and in Notes:
+    // each half light and half dark. Drawn light on dark, as they are in Dark mode, their halves swap,
+    // so there they're the inverse ones, which are drawn the other way round to swap them back.
     // They aren't in the public set, so they're looked up the way AppKit looks up its own private ones,
     // and given Light and Dark as their descriptions, which VoiceOver reads for the segments (theirs
     // are "Light mode appearance circle" and so on). A sun and a moon stand in if they're ever gone.
     private static let lightSymbol = appearanceSymbol("appearance.lightmode", standIn: "sun.max", description: SystemStrings.light)
     private static let darkSymbol = appearanceSymbol("appearance.darkmode", standIn: "moon", description: SystemStrings.dark)
+    private static let lightSymbolInverse = appearanceSymbol("appearance.lightmode.inverse", standIn: "sun.max", description: SystemStrings.light)
+    private static let darkSymbolInverse = appearanceSymbol("appearance.darkmode.inverse", standIn: "moon", description: SystemStrings.dark)
 
     private static func appearanceSymbol(_ name: String, standIn: String, description: String) -> NSImage {
         let lookup = NSSelectorFromString("imageWithPrivateSystemSymbolName:accessibilityDescription:")
