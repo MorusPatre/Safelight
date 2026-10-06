@@ -214,7 +214,7 @@ struct MenuView: View {
                 }
 
                 // --- APPEARANCE SECTION ---
-                // This drives System Settings › Appearance (Light and Dark). The Schedule leaves it alone.
+                // This drives System Settings › Appearance (Light and Dark).
                 GridRow(alignment: .top) {
                     Text(SystemStrings.appearance)
                         .fontWeight(.medium)
@@ -224,7 +224,7 @@ struct MenuView: View {
                         get: { controller.isDarkAppearance },
                         set: { controller.chooseAppearance(isDark: $0) }
                     ))
-                    .disabled(controller.isChangingAppearance)
+                    .disabled(controller.isAutoMode || controller.isChangingAppearance)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
@@ -454,6 +454,7 @@ struct ScheduleEditor: View {
                         Text(SystemStrings.intensity)
                         Text(SystemStrings.tint)
                         Text(SystemStrings.brightness)
+                        Text(SystemStrings.appearance)
                     }
                     .foregroundStyle(.secondary)
 
@@ -497,6 +498,14 @@ struct ScheduleEditor: View {
                             .labelsHidden()
                             .tint(.white)
                             .frame(minWidth: 90)
+
+                            Picker(SystemStrings.appearance, selection: $keyframe.isDarkAppearance) {
+                                Text(SystemStrings.light).tag(false)
+                                Text(SystemStrings.dark).tag(true)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .fixedSize()
 
                             Button {
                                 controller.deleteKeyframe(keyframe.id)
@@ -636,8 +645,16 @@ class ColorController: ObservableObject {
     @Published private(set) var isChangingAppearance: Bool = false
     
     @Published var isAutoMode: Bool = false {
-        didSet { if isAutoMode { applyAutoSettings() } }
+        didSet {
+            scheduledIsDarkAppearance = nil
+            if isAutoMode { applyAutoSettings() }
+        }
     }
+
+    /// The appearance the Schedule has for now, once it's been set. It's set again only when this
+    /// changes, so an appearance chosen in System Settings or Control Center stays until then, rather
+    /// than the screen fading back within the minute.
+    private var scheduledIsDarkAppearance: Bool?
     
     var isUserDraggingSlider: Bool = false
     /// The keyframe on screen while one of its sliders in the Schedule window is held down. Meanwhile
@@ -824,6 +841,10 @@ class ColorController: ObservableObject {
         self.intensity = settings.filterIntensity
         self.isColorFilterOn = settings.isColorFilterOn
         self.brightness = settings.brightness
+        if settings.isDarkAppearance != scheduledIsDarkAppearance {
+            scheduledIsDarkAppearance = settings.isDarkAppearance
+            applyScheduledAppearance()
+        }
     }
 
     /// Adds a keyframe at the next free half hour, set to what the schedule already has there.
@@ -834,13 +855,14 @@ class ColorController: ObservableObject {
         let minute = (0..<48).lazy.map { (nextHalfHour + $0 * 30) % 1440 }.first { !taken.contains($0) } ?? nextHalfHour % 1440
 
         let settings = ColorKeyframe.settings(in: schedule, at: Double(minute))
-            ?? ColorKeyframe.Settings(intensity: isColorFilterOn ? intensity : 0, tint: tint, brightness: brightness)
+            ?? ColorKeyframe.Settings(intensity: isColorFilterOn ? intensity : 0, tint: tint, brightness: brightness, isDarkAppearance: isDarkAppearance)
         schedule.append(ColorKeyframe(
             minute: minute,
             isColorFilterOn: settings.isColorFilterOn,
             intensity: settings.filterIntensity,
             tint: settings.tint,
-            brightness: settings.brightness
+            brightness: settings.brightness,
+            isDarkAppearance: settings.isDarkAppearance
         ))
     }
 
@@ -946,10 +968,34 @@ class ColorController: ObservableObject {
         withAnimation(.default, completionCriteria: .logicallyComplete) {
             isChangingAppearance = true
         } completion: { [weak self] in
-            AppearanceManager.shared.setDark(isDark) {
-                self?.isChangingAppearance = false
-                self?.syncWithSystemAppearance()
-            }
+            self?.changeSystemAppearance(isDark: isDark)
+        }
+    }
+
+    /// Changes the screen over to the Schedule's appearance in the same order. The picker is dimmed
+    /// already while the Schedule is on, but whatever changed the Schedule's appearance (a row in the
+    /// Schedule window, or the Schedule switch) shows it first for as long as the picker would dim.
+    private func applyScheduledAppearance() {
+        guard isAutoMode, let isDark = scheduledIsDarkAppearance, !isChangingAppearance else { return }
+        guard isDark != isDarkAppearance else {
+            AppearanceManager.shared.setDark(isDark) // nothing to change over to, but Auto would change it at sunset
+            return
+        }
+
+        isDarkAppearance = isDark
+        isChangingAppearance = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.changeSystemAppearance(isDark: isDark)
+        }
+    }
+
+    private func changeSystemAppearance(isDark: Bool) {
+        AppearanceManager.shared.setDark(isDark) { [weak self] in
+            guard let self else { return }
+            isChangingAppearance = false
+            syncWithSystemAppearance()
+            // The Schedule moved on to another appearance before the screen had changed over
+            if scheduledIsDarkAppearance != isDark { applyScheduledAppearance() }
         }
     }
 
@@ -967,7 +1013,8 @@ class ColorController: ObservableObject {
 }
 
 /// A point on the Schedule: the settings it reaches `minute` minutes after midnight. In between, the
-/// settings move steadily from one keyframe to the next, and from the last round midnight to the first.
+/// settings move steadily from one keyframe to the next, and from the last round midnight to the first,
+/// except the appearance, which can't: it changes over at each keyframe and stays until the next.
 struct ColorKeyframe: Identifiable, Codable, Equatable {
     var id = UUID()
     var minute: Int
@@ -975,13 +1022,14 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
     var intensity: Float // kept while the filter is off, for when it's turned back on
     var tint: Float      // degrees
     var brightness: Float
+    var isDarkAppearance: Bool
 
     static let defaultSchedule: [ColorKeyframe] = [
-        ColorKeyframe(minute: 5 * 60 + 45,  isColorFilterOn: true,  intensity: 0.35, tint: 0,   brightness: 0.82),
-        ColorKeyframe(minute: 6 * 60,       isColorFilterOn: false, intensity: 0.25, tint: 180, brightness: 1.00),
-        ColorKeyframe(minute: 18 * 60 + 45, isColorFilterOn: false, intensity: 0.25, tint: 180, brightness: 1.00),
-        ColorKeyframe(minute: 19 * 60,      isColorFilterOn: true,  intensity: 0.46, tint: 0,   brightness: 0.92),
-        ColorKeyframe(minute: 20 * 60 + 30, isColorFilterOn: true,  intensity: 0.78, tint: 0,   brightness: 0.68)
+        ColorKeyframe(minute: 5 * 60 + 45,  isColorFilterOn: true,  intensity: 0.35, tint: 0,   brightness: 0.82, isDarkAppearance: true),
+        ColorKeyframe(minute: 6 * 60,       isColorFilterOn: false, intensity: 0.25, tint: 180, brightness: 1.00, isDarkAppearance: false),
+        ColorKeyframe(minute: 18 * 60 + 45, isColorFilterOn: false, intensity: 0.25, tint: 180, brightness: 1.00, isDarkAppearance: false),
+        ColorKeyframe(minute: 19 * 60,      isColorFilterOn: true,  intensity: 0.46, tint: 0,   brightness: 0.92, isDarkAppearance: true),
+        ColorKeyframe(minute: 20 * 60 + 30, isColorFilterOn: true,  intensity: 0.78, tint: 0,   brightness: 0.68, isDarkAppearance: true)
     ]
 
     struct Settings {
@@ -990,6 +1038,8 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
         var intensity: Float
         var tint: Float
         var brightness: Float
+        /// The appearance of the keyframe at or before this time
+        var isDarkAppearance: Bool
 
         /// The system filter bottoms out at its "Low" intensity, so below that the schedule switches it off
         var isColorFilterOn: Bool { intensity >= ColorFilterManager.shared.intensityRange.lowerBound }
@@ -1032,8 +1082,24 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
         return Settings(
             intensity: startIntensity + (endIntensity - startIntensity) * progress,
             tint: tint,
-            brightness: start.brightness + (end.brightness - start.brightness) * progress
+            brightness: start.brightness + (end.brightness - start.brightness) * progress,
+            isDarkAppearance: start.isDarkAppearance
         )
+    }
+}
+
+extension ColorKeyframe {
+    /// Keyframes saved before they had an appearance come back Dark where the color filter is on, as
+    /// in the default schedule.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        minute = try container.decode(Int.self, forKey: .minute)
+        isColorFilterOn = try container.decode(Bool.self, forKey: .isColorFilterOn)
+        intensity = try container.decode(Float.self, forKey: .intensity)
+        tint = try container.decode(Float.self, forKey: .tint)
+        brightness = try container.decode(Float.self, forKey: .brightness)
+        isDarkAppearance = try container.decodeIfPresent(Bool.self, forKey: .isDarkAppearance) ?? isColorFilterOn
     }
 }
 
