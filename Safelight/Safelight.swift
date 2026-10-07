@@ -6,7 +6,7 @@ import ServiceManagement
 
 // MARK: - 1. App Entry Point
 @main
-struct SlowBurnApp: App {
+struct SafelightApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
@@ -77,7 +77,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 try service.register()
             }
         } catch {
-            NSLog("SlowBurn: couldn't change Open at Login: \(error)")
+            NSLog("Safelight: couldn't change Open at Login: \(error)")
         }
         // The user turned it off in Login Items before; only they can allow it again there.
         if service.status == .requiresApproval {
@@ -1505,7 +1505,7 @@ enum SystemStrings {
     private static var appName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? "SlowBurn"
+            ?? "Safelight"
     }
     
     /// The user's preferred languages. This app has no translations of its own, so a plain

@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		CD9BBC602F00563C00275750 /* SlowBurn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SlowBurn.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CD9BBC602F00563C00275750 /* Safelight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Safelight.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		CD9BBC622F00563C00275750 /* SlowBurn */ = {
+		CD9BBC622F00563C00275750 /* Safelight */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = SlowBurn;
+			path = Safelight;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		CD9BBC572F00563C00275750 = {
 			isa = PBXGroup;
 			children = (
-				CD9BBC622F00563C00275750 /* SlowBurn */,
+				CD9BBC622F00563C00275750 /* Safelight */,
 				CD9BBC612F00563C00275750 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		CD9BBC612F00563C00275750 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				CD9BBC602F00563C00275750 /* SlowBurn.app */,
+				CD9BBC602F00563C00275750 /* Safelight.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		CD9BBC5F2F00563C00275750 /* SlowBurn */ = {
+		CD9BBC5F2F00563C00275750 /* Safelight */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = CD9BBC6C2F00563D00275750 /* Build configuration list for PBXNativeTarget "SlowBurn" */;
+			buildConfigurationList = CD9BBC6C2F00563D00275750 /* Build configuration list for PBXNativeTarget "Safelight" */;
 			buildPhases = (
 				CD9BBC5C2F00563C00275750 /* Sources */,
 				CD9BBC5D2F00563C00275750 /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				CD9BBC622F00563C00275750 /* SlowBurn */,
+				CD9BBC622F00563C00275750 /* Safelight */,
 			);
-			name = SlowBurn;
+			name = Safelight;
 			packageProductDependencies = (
 			);
-			productName = SlowBurn;
-			productReference = CD9BBC602F00563C00275750 /* SlowBurn.app */;
+			productName = Safelight;
+			productReference = CD9BBC602F00563C00275750 /* Safelight.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -86,7 +86,7 @@
 					};
 				};
 			};
-			buildConfigurationList = CD9BBC5B2F00563C00275750 /* Build configuration list for PBXProject "SlowBurn" */;
+			buildConfigurationList = CD9BBC5B2F00563C00275750 /* Build configuration list for PBXProject "Safelight" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -100,7 +100,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				CD9BBC5F2F00563C00275750 /* SlowBurn */,
+				CD9BBC5F2F00563C00275750 /* Safelight */,
 			);
 		};
 /* End PBXProject section */
@@ -256,7 +256,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = SlowBurn/SlowBurn.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Safelight/Safelight.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -273,7 +273,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Mo.SlowBurn;
+				PRODUCT_BUNDLE_IDENTIFIER = Mo.Safelight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -288,7 +288,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = SlowBurn/SlowBurn.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Safelight/Safelight.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -305,7 +305,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Mo.SlowBurn;
+				PRODUCT_BUNDLE_IDENTIFIER = Mo.Safelight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -316,7 +316,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		CD9BBC5B2F00563C00275750 /* Build configuration list for PBXProject "SlowBurn" */ = {
+		CD9BBC5B2F00563C00275750 /* Build configuration list for PBXProject "Safelight" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				CD9BBC6A2F00563D00275750 /* Debug */,
@@ -325,7 +325,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		CD9BBC6C2F00563D00275750 /* Build configuration list for PBXNativeTarget "SlowBurn" */ = {
+		CD9BBC6C2F00563D00275750 /* Build configuration list for PBXNativeTarget "Safelight" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				CD9BBC6D2F00563D00275750 /* Debug */,
