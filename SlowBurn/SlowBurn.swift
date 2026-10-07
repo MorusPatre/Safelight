@@ -395,7 +395,7 @@ struct AppearancePicker: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    /// A thumbnail scaled down to `height`, as an image for a segmented picker in the Schedule window:
+    /// A thumbnail scaled down to `height`, as an image for the Schedule window's `AppearanceSegments`:
     /// drawn as here, with its corners and the highlight in it in the accent colour, and redrawn each
     /// time it's shown, so it follows the accent colour. Its name is what VoiceOver reads for it.
     static func thumbnail(isDark: Bool, height: CGFloat) -> NSImage {
@@ -428,6 +428,51 @@ struct AppearancePicker: View {
         }
         image.accessibilityDescription = isDark ? SystemStrings.dark : SystemStrings.light
         return image
+    }
+}
+
+/// Light and Dark for a keyframe in the Schedule window: a segmented control with the Appearance
+/// picker's thumbnails in its segments. It's AppKit's own control rather than a segmented `Picker`,
+/// whose segments leave 5 pt either side of an image, so the segments' widths can be set: each
+/// thumbnail leaves `border` above and below it, and its segment is that much wider either side, so
+/// the selection shows as an even, thin border around the chosen one.
+struct AppearanceSegments: NSViewRepresentable {
+    @Binding var isDark: Bool
+
+    private static let border: CGFloat = 2
+    /// The height of a segmented control, which the selection fills
+    private static let controlHeight = NSSegmentedControl(labels: [""], trackingMode: .selectOne, target: nil, action: nil).fittingSize.height
+    private static let thumbnails = [false, true].map { AppearancePicker.thumbnail(isDark: $0, height: controlHeight - 2 * border) }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(
+            images: Self.thumbnails, trackingMode: .selectOne,
+            target: context.coordinator, action: #selector(Coordinator.selectionDidChange(_:))
+        )
+        for (segment, thumbnail) in Self.thumbnails.enumerated() {
+            control.setWidth(thumbnail.size.width + 2 * Self.border, forSegment: segment)
+            control.setToolTip(segment == 1 ? SystemStrings.dark : SystemStrings.light, forSegment: segment)
+        }
+        control.setAccessibilityLabel(SystemStrings.appearance)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.selectionDidChangeHandler = { isDark = $0 }
+        control.selectedSegment = isDark ? 1 : 0
+        control.isEnabled = context.environment.isEnabled
+    }
+
+    final class Coordinator: NSObject {
+        var selectionDidChangeHandler: (Bool) -> Void = { _ in }
+
+        @objc func selectionDidChange(_ sender: NSSegmentedControl) {
+            selectionDidChangeHandler(sender.selectedSegment == 1)
+        }
     }
 }
 
@@ -534,13 +579,8 @@ struct ScheduleEditor: View {
                             .tint(.white)
                             .frame(minWidth: 90)
 
-                            Picker(SystemStrings.appearance, selection: $keyframe.isDarkAppearance) {
-                                Image(nsImage: Self.lightThumbnail).help(SystemStrings.light).tag(false)
-                                Image(nsImage: Self.darkThumbnail).help(SystemStrings.dark).tag(true)
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.segmented)
-                            .fixedSize()
+                            AppearanceSegments(isDark: $keyframe.isDarkAppearance)
+                                .fixedSize()
 
                             Button {
                                 controller.deleteKeyframe(keyframe.id)
@@ -600,10 +640,6 @@ struct ScheduleEditor: View {
         guard let screen = NSScreen.main else { return .infinity }
         return NSWindow.contentRect(forFrameRect: screen.visibleFrame, styleMask: [.titled, .closable, .miniaturizable]).height
     }
-
-    // The Appearance picker's thumbnails, small enough for a segment
-    private static let lightThumbnail = AppearancePicker.thumbnail(isDark: false, height: 16)
-    private static let darkThumbnail = AppearancePicker.thumbnail(isDark: true, height: 16)
 
     // Times of day are edited as times on the first day of 2001 in UTC, which has no daylight saving
     // changes to skip or repeat a time, so every time reads back as it was set.
