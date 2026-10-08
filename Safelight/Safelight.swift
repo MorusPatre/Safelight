@@ -535,6 +535,16 @@ struct ScheduleEditor: View {
                         Text(SystemStrings.tint)
                         Text(SystemStrings.brightness)
                         Text(SystemStrings.appearance)
+
+                        // Add heads the column of the keyframes' Delete buttons
+                        Button {
+                            controller.addKeyframe()
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(SystemStrings.add)
+                        .accessibilityLabel(SystemStrings.add)
                     }
                     .foregroundStyle(.secondary)
 
@@ -621,11 +631,6 @@ struct ScheduleEditor: View {
                     .help(SystemStrings.redo)
                     .accessibilityLabel(SystemStrings.redo)
                     .disabled(!controller.scheduleUndoManager.canRedo)
-
-                    Spacer()
-                    Button(SystemStrings.add) {
-                        controller.addKeyframe()
-                    }
                 }
             }
         }
