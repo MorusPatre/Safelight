@@ -748,13 +748,9 @@ struct ScheduleEditor: View {
                 .scheduleBox(padding: layout.boxPadding)
 
                 HStack {
-                    Button(SystemStrings.restoreDefaults) {
-                        controller.restoreDefaultSchedule()
-                    }
-
                     // The Edit menu's Undo and Redo. Whatever changes which of them there is to do
                     // changes the schedule as well, and that redraws them. Their symbols are set as
-                    // text, which makes the buttons as tall as the ones either side.
+                    // text, which makes the buttons as tall as ones with words.
                     Button {
                         controller.scheduleUndoManager.undo()
                     } label: {
@@ -1368,10 +1364,6 @@ class ColorController: ObservableObject {
     func deleteKeyframe(_ id: ColorKeyframe.ID) {
         guard schedule.count > 1 else { return }
         schedule.removeAll { $0.id == id }
-    }
-
-    func restoreDefaultSchedule() {
-        schedule = ColorKeyframe.defaultSchedule
     }
 
     /// Sets a keyframe's time. Setting the same keyframe's time again straight after is undone with it.
