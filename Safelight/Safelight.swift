@@ -746,30 +746,6 @@ struct ScheduleEditor: View {
                 // all its columns), and the window with it
                 .fixedSize(horizontal: true, vertical: false)
                 .scheduleBox(padding: layout.boxPadding)
-
-                HStack {
-                    // The Edit menu's Undo and Redo. Whatever changes which of them there is to do
-                    // changes the schedule as well, and that redraws them. Their symbols are set as
-                    // text, which makes the buttons as tall as ones with words.
-                    Button {
-                        controller.scheduleUndoManager.undo()
-                    } label: {
-                        Text(Image(systemName: "arrow.uturn.backward"))
-                    }
-                    .help(SystemStrings.undo)
-                    .accessibilityLabel(SystemStrings.undo)
-                    .disabled(!controller.scheduleUndoManager.canUndo)
-
-                    Button {
-                        controller.scheduleUndoManager.redo()
-                    } label: {
-                        Text(Image(systemName: "arrow.uturn.forward"))
-                    }
-                    .help(SystemStrings.redo)
-                    .accessibilityLabel(SystemStrings.redo)
-                    .disabled(!controller.scheduleUndoManager.canRedo)
-                }
-                .padding(.horizontal, layout.boxPadding)
             }
             .padding(.horizontal, layout.sideMargin)
             .padding(.top, layout.topMargin)
@@ -1902,10 +1878,6 @@ enum SystemStrings {
     static let delete = lookup("global.button.delete", in: accessibilitySettings, english: "Delete")
     static let restoreDefaults = lookup("keyboard.access.restoreDefaults", in: accessibilitySettings, english: "Restore Defaults")
     static let time = lookup("Time", in: controlCenterSettings, english: "Time")
-
-    // The Edit menu SwiftUI gives this app, whose Undo and Redo the Schedule window's buttons are
-    static let undo = lookup("Undo", table: "MainMenu", in: swiftUI, english: "Undo")
-    static let redo = lookup("Redo", table: "MainMenu", in: swiftUI, english: "Redo")
 
     // The title of Control Center's Display module, which this popover stands in for
     static let display = lookup("Display", table: "Display", in: controlCenter, english: "Display")
