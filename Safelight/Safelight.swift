@@ -557,6 +557,7 @@ struct AppearanceSegments: NSViewRepresentable {
     /// The height of a segmented control, which the selection fills
     private static let controlHeight = NSSegmentedControl(labels: [""], trackingMode: .selectOne, target: nil, action: nil).fittingSize.height
     private static let thumbnails = [false, true].map { AppearancePicker.thumbnail(isDark: $0, height: controlHeight - 2 * border) }
+    private static let segmentWidths = thumbnails.map { $0.size.width + 2 * border }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -567,12 +568,20 @@ struct AppearanceSegments: NSViewRepresentable {
             images: Self.thumbnails, trackingMode: .selectOne,
             target: context.coordinator, action: #selector(Coordinator.selectionDidChange(_:))
         )
-        for (segment, thumbnail) in Self.thumbnails.enumerated() {
-            control.setWidth(thumbnail.size.width + 2 * Self.border, forSegment: segment)
+        for (segment, width) in Self.segmentWidths.enumerated() {
+            control.setWidth(width, forSegment: segment)
             control.setToolTip(segment == 1 ? SystemStrings.dark : SystemStrings.light, forSegment: segment)
         }
         control.setAccessibilityLabel(SystemStrings.appearance)
         return control
+    }
+
+    // The size is given rather than asked of the control. One made while SwiftUI is updating, as a
+    // row added with + is, takes the widths set above only afterwards, and until then measures as if
+    // its segments had their own widths (80 pt instead of 68); once they arrive it doesn't say its size
+    // has changed, so the row kept the wider frame, with the segments centred in it, out of line.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context: Context) -> CGSize? {
+        CGSize(width: Self.segmentWidths.reduce(0, +), height: Self.controlHeight)
     }
 
     func updateNSView(_ control: NSSegmentedControl, context: Context) {
