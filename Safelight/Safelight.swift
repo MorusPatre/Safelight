@@ -57,6 +57,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Read each time, as it can also be changed in System Settings › General › Login Items.
         openAtLogin.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(openAtLogin)
+        #if DEBUG
+        let scheduleLayout = NSMenuItem(title: "Schedule Layout…", action: #selector(showScheduleLayout(_:)), keyEquivalent: "")
+        scheduleLayout.target = self
+        menu.addItem(scheduleLayout)
+        #endif
         menu.addItem(.separator())
         let quit = NSMenuItem(title: SystemStrings.quitApp, action: #selector(quit(_:)), keyEquivalent: "q")
         quit.target = self
@@ -85,6 +90,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    #if DEBUG
+    @objc private func showScheduleLayout(_ sender: NSMenuItem) {
+        ScheduleLayoutWindow.shared.show()
+    }
+    #endif
+
     @objc func quit(_ sender: Any?) {
         ColorController.shared.reset()
         NSApplication.shared.terminate(nil)
@@ -330,6 +341,109 @@ final class HueSlider: NSSlider {
     }
 }
 
+// MARK: - Time Field
+/// A time of day as hours and minutes in a field with a stepper, like `DatePicker`'s `.stepperField`
+/// style, but with the time centred in the field: AppKit puts it 1.5 pt high, so the selected hour or
+/// minute touches the top of the field.
+struct TimeField: NSViewRepresentable {
+    var label: String
+    @Binding var selection: Date
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> TimeFieldPicker {
+        let picker = TimeFieldPicker()
+        picker.datePickerStyle = .textFieldAndStepper
+        picker.datePickerElements = .hourMinute
+        // Only as wide as the time and its stepper, like DatePicker
+        picker.setContentHuggingPriority(.required, for: .horizontal)
+        picker.setContentHuggingPriority(.required, for: .vertical)
+        picker.target = context.coordinator
+        picker.action = #selector(Coordinator.dateDidChange(_:))
+        picker.setAccessibilityLabel(label)
+        return picker
+    }
+
+    func updateNSView(_ picker: TimeFieldPicker, context: Context) {
+        context.coordinator.dateDidChangeHandler = { selection = $0 }
+        // Only the time zone is taken from the environment, as the picker's calendar, which it reads as
+        // changed each time, selects the hours again whenever it's set
+        if picker.timeZone != context.environment.timeZone {
+            picker.timeZone = context.environment.timeZone
+        }
+        if picker.dateValue != selection {
+            picker.dateValue = selection
+        }
+        picker.isEnabled = context.environment.isEnabled
+    }
+
+    final class Coordinator: NSObject {
+        var dateDidChangeHandler: (Date) -> Void = { _ in }
+
+        @objc func dateDidChange(_ sender: NSDatePicker) {
+            dateDidChangeHandler(sender.dateValue)
+        }
+    }
+}
+
+/// A date picker set up as any other, field and all, but with a `TimeFieldCell`.
+final class TimeFieldPicker: NSDatePicker {
+    override class var cellClass: AnyClass? {
+        get { TimeFieldCell.self }
+        set { super.cellClass = newValue }
+    }
+}
+
+/// A date picker cell that draws its text and selection lower down, in the middle of its field.
+/// AppKit only draws them along with the field, so the cell draws in three goes: a cell of its own
+/// draws the field with no text, this cell draws its stepper, and then its text and selection without
+/// the field, lower down. Clicks are still matched to the hours and minutes where AppKit puts them,
+/// which is only 1.5 pt higher.
+final class TimeFieldCell: NSDatePickerCell {
+    private static let textDrop: CGFloat = 1.5
+    /// The width AppKit gives the stepper at the right of the cell, which takes in the gap between it
+    /// and the field
+    private static let stepperWidth = NSStepperCell().cellSize.width
+
+    override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
+        // Split where the stepper starts, with room all round, as AppKit draws a little past the frame
+        let canvas = cellFrame.insetBy(dx: -cellFrame.width, dy: -cellFrame.height)
+        let (stepperArea, fieldArea) = canvas.divided(atDistance: canvas.maxX - (cellFrame.maxX - Self.stepperWidth), from: .maxXEdge)
+
+        let fieldCell = NSDatePickerCell()
+        fieldCell.datePickerStyle = datePickerStyle
+        fieldCell.datePickerElements = datePickerElements
+        fieldCell.controlSize = controlSize
+        fieldCell.font = font
+        fieldCell.isEnabled = isEnabled
+        fieldCell.isBezeled = isBezeled
+        fieldCell.textColor = .clear
+        draw(clippedTo: fieldArea) {
+            fieldCell.draw(withFrame: cellFrame, in: controlView)
+        }
+        // The stepper is this cell's own, so it shows the arrow being pressed
+        draw(clippedTo: stepperArea) {
+            super.draw(withFrame: cellFrame, in: controlView)
+        }
+        // Without the field, which is put back straight after, before anything lays the cell out again
+        let isBezeled = isBezeled
+        self.isBezeled = false
+        draw(clippedTo: fieldArea) {
+            super.draw(withFrame: cellFrame.offsetBy(dx: 0, dy: controlView.isFlipped ? Self.textDrop : -Self.textDrop), in: controlView)
+        }
+        self.isBezeled = isBezeled
+    }
+
+    private func draw(clippedTo area: NSRect, _ drawing: () -> Void) {
+        NSGraphicsContext.saveGraphicsState()
+        area.clip()
+        drawing()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
 // MARK: - Appearance Picker (System Settings' Appearance Thumbnails)
 /// The Light and Dark of the picker in System Settings › Appearance (its `AppearanceThemePicker`, which
 /// comes with Auto and can't be had without it), rebuilt from its parts: System Settings' thumbnails,
@@ -485,6 +599,7 @@ final class ScheduleWindow: NSObject, NSWindowDelegate {
     func show() {
         if window == nil {
             // The window can't be resized: it takes the editor's size, and follows it as rows come and go
+            // (and, in Debug builds, as the Schedule Layout panel changes it)
             let hostingController = NSHostingController(rootView: ScheduleEditor())
             hostingController.sizingOptions = [.minSize, .maxSize]
             let window = NSWindow(contentViewController: hostingController)
@@ -519,22 +634,35 @@ final class ScheduleWindow: NSObject, NSWindowDelegate {
 /// The Schedule's keyframes, a row each, under a preview of the day they make.
 struct ScheduleEditor: View {
     @ObservedObject var controller = ColorController.shared
+    #if DEBUG
+    @ObservedObject private var layoutTuner = ScheduleLayoutTuner.shared
+    private var layout: ScheduleLayout { layoutTuner.layout }
+    #else
+    private let layout = ScheduleLayout.standard
+    #endif
 
+    // Laid out like a grouped Form, whose sections are never wider than about 700 pt, so the window
+    // can be as wide as the columns need
     var body: some View {
-        Form {
-            Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: layout.boxSpacing) {
                 ScheduleDayView(schedule: controller.schedule)
-            }
+                    .scheduleBox(padding: layout.boxPadding)
 
-            Section {
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                // Each column after the first is set off from the one before by its own gap
+                Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: layout.rowSpacing) {
                     GridRow {
                         Text(SystemStrings.time)
                         Text(SystemStrings.colorFilters)
+                            .padding(.leading, layout.gapBeforeColorFilters)
                         Text(SystemStrings.intensity)
+                            .padding(.leading, layout.gapBeforeIntensity)
                         Text(SystemStrings.tint)
+                            .padding(.leading, layout.gapBeforeTint)
                         Text(SystemStrings.brightness)
+                            .padding(.leading, layout.gapBeforeBrightness)
                         Text(SystemStrings.appearance)
+                            .padding(.leading, layout.gapBeforeAppearance)
 
                         // Add heads the column of the keyframes' Delete buttons
                         Button {
@@ -545,22 +673,26 @@ struct ScheduleEditor: View {
                         .buttonStyle(.borderless)
                         .help(SystemStrings.add)
                         .accessibilityLabel(SystemStrings.add)
+                        .padding(.leading, layout.gapBeforeDelete)
                     }
                     .foregroundStyle(.secondary)
 
                     ForEach($controller.schedule) { $keyframe in
-                        Divider()
+                        // A grouped Form's lighter line between rows
+                        Rectangle()
+                            .fill(Color(nsColor: .quinaryLabelColor))
+                            .frame(height: 1)
+                            .gridCellUnsizedAxes(.horizontal)
 
                         GridRow {
-                            DatePicker(SystemStrings.time, selection: time(of: keyframe.id), displayedComponents: .hourAndMinute)
-                                .labelsHidden()
-                                .datePickerStyle(.stepperField)
+                            TimeField(label: SystemStrings.time, selection: time(of: keyframe.id))
                                 .environment(\.timeZone, Self.utc)
 
                             Toggle(SystemStrings.colorFilters, isOn: $keyframe.isColorFilterOn)
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
+                                .padding(.leading, layout.gapBeforeColorFilters)
 
                             // Holding any of the sliders shows its keyframe on screen until it's let go
                             Slider(value: $keyframe.intensity, in: ColorFilterManager.shared.intensityRange) {
@@ -571,14 +703,16 @@ struct ScheduleEditor: View {
                             .labelsHidden()
                             .tint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
                             .disabled(!keyframe.isColorFilterOn)
-                            .frame(minWidth: 90)
+                            .frame(width: layout.intensityWidth)
+                            .padding(.leading, layout.gapBeforeIntensity)
 
                             TintSlider(value: $keyframe.tint) { isEditing in
                                 controller.preview(isEditing ? keyframe.id : nil)
                             }
                             .disabled(!keyframe.isColorFilterOn)
                             .opacity(keyframe.isColorFilterOn ? 1.0 : 0.6)
-                            .frame(minWidth: 90)
+                            .frame(width: layout.tintWidth)
+                            .padding(.leading, layout.gapBeforeTint)
 
                             Slider(value: $keyframe.brightness, in: 0.0...1.0) {
                                 Text(SystemStrings.brightness)
@@ -587,10 +721,12 @@ struct ScheduleEditor: View {
                             }
                             .labelsHidden()
                             .tint(.white)
-                            .frame(minWidth: 90)
+                            .frame(width: layout.brightnessWidth)
+                            .padding(.leading, layout.gapBeforeBrightness)
 
                             AppearanceSegments(isDark: $keyframe.isDarkAppearance)
                                 .fixedSize()
+                                .padding(.leading, layout.gapBeforeAppearance)
 
                             Button {
                                 controller.deleteKeyframe(keyframe.id)
@@ -602,10 +738,15 @@ struct ScheduleEditor: View {
                             .help(SystemStrings.delete)
                             .accessibilityLabel(SystemStrings.delete)
                             .disabled(controller.schedule.count == 1)
+                            .padding(.leading, layout.gapBeforeDelete)
                         }
                     }
                 }
-            } footer: {
+                // Only as wide as its columns and gaps (offered more, a Grid shares it out between
+                // all its columns), and the window with it
+                .fixedSize(horizontal: true, vertical: false)
+                .scheduleBox(padding: layout.boxPadding)
+
                 HStack {
                     Button(SystemStrings.restoreDefaults) {
                         controller.restoreDefaultSchedule()
@@ -632,12 +773,14 @@ struct ScheduleEditor: View {
                     .accessibilityLabel(SystemStrings.redo)
                     .disabled(!controller.scheduleUndoManager.canRedo)
                 }
+                .padding(.horizontal, layout.boxPadding)
             }
+            .padding(.horizontal, layout.sideMargin)
+            .padding(.top, layout.topMargin)
+            .padding(.bottom, layout.bottomMargin)
         }
-        .formStyle(.grouped)
-        .frame(width: 760)
         .frame(maxHeight: maxHeight)
-        .fixedSize(horizontal: false, vertical: true)
+        .fixedSize()
     }
 
     // As tall as its rows, until the window fills the height of the screen, and then they scroll
@@ -707,6 +850,281 @@ struct ScheduleDayView: View {
         .frame(height: stripHeight + 27)
     }
 }
+
+private extension View {
+    /// One of the Schedule window's boxes, drawn like a section of a grouped Form, as wide as the window has room for.
+    func scheduleBox(padding: CGFloat) -> some View {
+        self.padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(scheduleBoxFill, in: RoundedRectangle(cornerRadius: 12, style: .circular))
+    }
+}
+
+/// A grouped Form's sections are a touch darker in light mode, and lighter in dark mode, than the window.
+private let scheduleBoxFill = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.03) : NSColor(white: 0, alpha: 0.03)
+})
+
+// MARK: - Schedule Layout
+/// The widths of the Schedule window's sliders and the space around its boxes, rows and columns,
+/// which the window takes its size from. Debug builds can change them in the Schedule Layout panel to
+/// try others out; release builds always use `standard`, which matches a grouped Form.
+struct ScheduleLayout: Equatable {
+    var sideMargin: CGFloat = 28
+    var topMargin: CGFloat = 20
+    var bottomMargin: CGFloat = 20
+    var boxPadding: CGFloat = 10
+    var boxSpacing: CGFloat = 28
+    var intensityWidth: CGFloat = 160
+    var tintWidth: CGFloat = 160
+    var brightnessWidth: CGFloat = 160
+    var rowSpacing: CGFloat = 15
+    var gapBeforeColorFilters: CGFloat = 40
+    var gapBeforeIntensity: CGFloat = 40
+    var gapBeforeTint: CGFloat = 40
+    var gapBeforeBrightness: CGFloat = 40
+    var gapBeforeAppearance: CGFloat = 40
+    var gapBeforeDelete: CGFloat = 40
+
+    static let standard = ScheduleLayout()
+}
+
+#if DEBUG
+extension ScheduleLayout {
+    /// The tighter spacing the Schedule window had as a grouped Form, before it could be changed.
+    static let compact = ScheduleLayout(
+        boxSpacing: 10,
+        intensityWidth: 120, tintWidth: 120, brightnessWidth: 120,
+        rowSpacing: 10,
+        gapBeforeColorFilters: 16, gapBeforeIntensity: 16, gapBeforeTint: 16,
+        gapBeforeBrightness: 16, gapBeforeAppearance: 16, gapBeforeDelete: 16
+    )
+
+    /// Layouts the Schedule Layout panel can switch to at once.
+    static let templates: [(name: String, layout: ScheduleLayout)] = [
+        ("Spacious", .standard),
+        ("Compact", .compact),
+    ]
+}
+#endif
+
+#if DEBUG
+/// The layout the Schedule window has in Debug builds, kept between launches until it's restored.
+final class ScheduleLayoutTuner: ObservableObject {
+    static let shared = ScheduleLayoutTuner()
+
+    /// A value the panel has a slider for, and the key it's saved under.
+    struct Field: Identifiable {
+        let key: String
+        let name: String
+        let keyPath: WritableKeyPath<ScheduleLayout, CGFloat>
+        let range: ClosedRange<CGFloat>
+        var id: String { key }
+    }
+
+    static let windowFields = [
+        Field(key: "sideMargin", name: "Sides", keyPath: \.sideMargin, range: 0...80),
+        Field(key: "topMargin", name: "Top", keyPath: \.topMargin, range: 0...80),
+        Field(key: "bottomMargin", name: "Bottom", keyPath: \.bottomMargin, range: 0...80),
+    ]
+
+    static let boxFields = [
+        Field(key: "boxPadding", name: "Inside each box", keyPath: \.boxPadding, range: 0...40),
+        Field(key: "boxSpacing", name: "Between boxes", keyPath: \.boxSpacing, range: 0...40),
+    ]
+
+    static let widthFields = [
+        Field(key: "intensityWidth", name: SystemStrings.intensity, keyPath: \.intensityWidth, range: 60...300),
+        Field(key: "tintWidth", name: SystemStrings.tint, keyPath: \.tintWidth, range: 60...300),
+        Field(key: "brightnessWidth", name: SystemStrings.brightness, keyPath: \.brightnessWidth, range: 60...300),
+    ]
+
+    static let gapFields = [
+        Field(key: "gapBeforeColorFilters", name: SystemStrings.colorFilters, keyPath: \.gapBeforeColorFilters, range: 0...80),
+        Field(key: "gapBeforeIntensity", name: SystemStrings.intensity, keyPath: \.gapBeforeIntensity, range: 0...80),
+        Field(key: "gapBeforeTint", name: SystemStrings.tint, keyPath: \.gapBeforeTint, range: 0...80),
+        Field(key: "gapBeforeBrightness", name: SystemStrings.brightness, keyPath: \.gapBeforeBrightness, range: 0...80),
+        Field(key: "gapBeforeAppearance", name: SystemStrings.appearance, keyPath: \.gapBeforeAppearance, range: 0...80),
+        Field(key: "gapBeforeDelete", name: SystemStrings.delete, keyPath: \.gapBeforeDelete, range: 0...80),
+    ]
+
+    static let rowSpacingField = Field(key: "rowSpacing", name: "Row spacing", keyPath: \.rowSpacing, range: 0...30)
+
+    private static let fields = windowFields + boxFields + widthFields + gapFields + [rowSpacingField]
+
+    private static let defaultsKey = "scheduleLayout"
+
+    @Published var layout: ScheduleLayout {
+        didSet { save() }
+    }
+
+    private init() {
+        var layout = ScheduleLayout.standard
+        let saved = UserDefaults.standard.dictionary(forKey: Self.defaultsKey) as? [String: Double] ?? [:]
+        for field in Self.fields {
+            if let value = saved[field.key] { layout[keyPath: field.keyPath] = value }
+        }
+        self.layout = layout
+    }
+
+    // Saved as numbers by name, so `defaults read Mo.Safelight scheduleLayout` shows them
+    private func save() {
+        guard layout != .standard else {
+            UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+            return
+        }
+        let values = Self.fields.map { ($0.key, Double(layout[keyPath: $0.keyPath])) }
+        UserDefaults.standard.set(Dictionary(uniqueKeysWithValues: values), forKey: Self.defaultsKey)
+    }
+}
+
+/// Sliders for the Schedule window's layout, which moves as they're dragged. Each changes only the
+/// width or space it's named for, and the window grows and shrinks to fit.
+struct ScheduleLayoutPanel: View {
+    @ObservedObject var tuner = ScheduleLayoutTuner.shared
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Template", selection: template) {
+                    ForEach(ScheduleLayout.templates, id: \.name) { template in
+                        Text(template.name).tag(Optional(template.name))
+                    }
+                    // Only there to name values that aren't a template's
+                    if templateName == nil {
+                        Text("Custom").tag(String?.none)
+                    }
+                }
+            }
+
+            Section("Space to the window's edges") {
+                ForEach(ScheduleLayoutTuner.windowFields, content: row)
+            }
+
+            Section("Space around the boxes") {
+                ForEach(ScheduleLayoutTuner.boxFields, content: row)
+            }
+
+            Section("Width of each slider") {
+                ForEach(ScheduleLayoutTuner.widthFields, content: row)
+            }
+
+            Section("Space before each column") {
+                row("All columns", value: allGaps, in: 0...80, isChanged: ScheduleLayoutTuner.gapFields.contains(where: isChanged), help: "Sets every column's gap at once") {
+                    for field in ScheduleLayoutTuner.gapFields { reset(field) }
+                }
+                ForEach(ScheduleLayoutTuner.gapFields, content: row)
+            }
+
+            Section {
+                row(ScheduleLayoutTuner.rowSpacingField)
+            } footer: {
+                Button(SystemStrings.restoreDefaults) {
+                    tuner.layout = .standard
+                }
+                .disabled(tuner.layout == .standard)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 440)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func row(_ field: ScheduleLayoutTuner.Field) -> some View {
+        row(field.name, value: $tuner.layout[dynamicMember: field.keyPath], in: field.range, isChanged: isChanged(field), help: "Standard: \(Int(ScheduleLayout.standard[keyPath: field.keyPath])) pt") {
+            reset(field)
+        }
+    }
+
+    /// A slider and stepper for one value, which reads in bold once it's been changed, with a button
+    /// to put it back that's there only then.
+    private func row(_ name: String, value: Binding<CGFloat>, in range: ClosedRange<CGFloat>, isChanged: Bool, help: String, reset: @escaping () -> Void) -> some View {
+        LabeledContent(name) {
+            HStack {
+                // Rounded to whole points as it's dragged; a `step` would draw a tick mark for each one
+                Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0.rounded() }), in: range)
+                    .frame(width: 150)
+                Text("\(Int(value.wrappedValue)) pt")
+                    .monospacedDigit()
+                    .fontWeight(isChanged ? .bold : .regular)
+                    .frame(width: 52, alignment: .trailing)
+                Stepper(name, value: value, in: range, step: 1)
+                    .labelsHidden()
+
+                // Hidden rather than left out while there's nothing to reset, so the rows stay lined up
+                Button(action: reset) {
+                    Image(systemName: "arrow.counterclockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Reset")
+                .accessibilityLabel("Reset \(name)")
+                .opacity(isChanged ? 1 : 0)
+                .disabled(!isChanged)
+            }
+        }
+        .help(help)
+    }
+
+    private func isChanged(_ field: ScheduleLayoutTuner.Field) -> Bool {
+        tuner.layout[keyPath: field.keyPath] != ScheduleLayout.standard[keyPath: field.keyPath]
+    }
+
+    private func reset(_ field: ScheduleLayoutTuner.Field) {
+        tuner.layout[keyPath: field.keyPath] = ScheduleLayout.standard[keyPath: field.keyPath]
+    }
+
+    /// The template the layout is, if it's one of them.
+    private var templateName: String? {
+        ScheduleLayout.templates.first { $0.layout == tuner.layout }?.name
+    }
+
+    /// Choosing a template sets every value to its own.
+    private var template: Binding<String?> {
+        Binding(
+            get: { templateName },
+            set: { name in
+                if let template = ScheduleLayout.templates.first(where: { $0.name == name }) {
+                    tuner.layout = template.layout
+                }
+            }
+        )
+    }
+
+    /// Every column's gap at once, reading as the widest of them.
+    private var allGaps: Binding<CGFloat> {
+        Binding(
+            get: { ScheduleLayoutTuner.gapFields.map { tuner.layout[keyPath: $0.keyPath] }.max() ?? 0 },
+            set: { gap in
+                for field in ScheduleLayoutTuner.gapFields { tuner.layout[keyPath: field.keyPath] = gap }
+            }
+        )
+    }
+}
+
+/// The floating panel with `ScheduleLayoutPanel`, from Schedule Layout… in the status item's menu.
+final class ScheduleLayoutWindow {
+    static let shared = ScheduleLayoutWindow()
+    private var panel: NSPanel?
+
+    func show() {
+        ScheduleWindow.shared.show()
+        if panel == nil {
+            let hostingController = NSHostingController(rootView: ScheduleLayoutPanel())
+            hostingController.sizingOptions = [.minSize, .maxSize]
+            let panel = NSPanel(contentRect: .zero, styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
+            panel.contentViewController = hostingController
+            panel.title = "Schedule Layout"
+            panel.isFloatingPanel = true
+            panel.isReleasedWhenClosed = false
+            panel.setContentSize(hostingController.sizeThatFits(in: panel.contentMaxSize))
+            panel.center()
+            panel.setFrameAutosaveName("ScheduleLayout") // back where it was left, if it's been moved
+            self.panel = panel
+        }
+        panel?.makeKeyAndOrderFront(nil)
+    }
+}
+#endif
 
 // MARK: - 4. Logic Controller
 class ColorController: ObservableObject {
