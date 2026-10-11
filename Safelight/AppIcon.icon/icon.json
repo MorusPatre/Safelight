@@ -1,0 +1,37 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "srgb:0.11000,0.11000,0.18000,1.00000",
+      "srgb:0.03000,0.03000,0.06000,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Knob.svg",
+          "name": "Knob",
+          "glass": true
+        },
+        {
+          "image-name": "Dial.svg",
+          "name": "Dial",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.4
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

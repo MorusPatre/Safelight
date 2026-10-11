@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="Safelight's icon: a 24-hour dial, white through the day and red through the night">
+</p>
+
 # Safelight
 
 Safelight puts your Mac's color filter, brightness and Light/Dark appearance on one schedule. Choose how the screen should look at a few times of day, and Safelight fades from one to the next: plain white through the afternoon, warmer and dimmer after sunset, deep red late at night, and back again in the morning.
