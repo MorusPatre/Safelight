@@ -30,7 +30,7 @@ Click the menu bar icon for the controls, and the gear next to Schedule to edit 
 
 Safelight needs macOS 15.5 or later, on Apple silicon or Intel.
 
-1. Download the Safelight zip file from the [latest release](https://github.com/MorusPatre/Safelight/releases/latest), open it, and drag Safelight into your Applications folder.
+1. Download the Safelight disk image (`.dmg`) from the [latest release](https://github.com/MorusPatre/Safelight/releases/latest), open it, and drag Safelight onto the Applications folder beside it.
 2. Open Safelight. It isn't notarized by Apple, so macOS says it can't check it for malware. Click **Done**.
 3. Open **System Settings › Privacy & Security**, scroll down, and click **Open Anyway** next to the message about Safelight. Confirm with your password.
 

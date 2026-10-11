@@ -1,8 +1,8 @@
 #!/bin/zsh
 # Builds Safelight (Release) for Apple silicon and Intel, signed ad hoc so no Apple Developer
-# account is needed, and zips it for a GitHub release.
+# account is needed, and puts it in a disk image for a GitHub release.
 #
-#   scripts/release.sh        writes build/release/Safelight.app and Safelight-<version>.zip
+#   scripts/release.sh        writes build/release/Safelight.app and Safelight-<version>.dmg
 
 set -eu
 cd "${0:A:h}/.."
@@ -24,8 +24,17 @@ fi
 codesign --verify --deep --strict "$APP"
 
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")
-rm -rf "$OUT/Safelight.app" "$OUT/Safelight-$VERSION.zip"
+DMG="$OUT/Safelight-$VERSION.dmg"
+STAGE="$OUT/disk-image"
+rm -rf "$OUT/Safelight.app" "$STAGE" "$DMG"
 ditto "$APP" "$OUT/Safelight.app"
-# ditto keeps the signature and extended attributes intact, which a plain zip can break.
-ditto -c -k --keepParent "$OUT/Safelight.app" "$OUT/Safelight-$VERSION.zip"
-echo "Safelight $VERSION ($(lipo -archs "$OUT/Safelight.app/Contents/MacOS/Safelight")): $OUT/Safelight-$VERSION.zip"
+
+# The disk image's window: Safelight beside a link to Applications, laid out by
+# scripts/dmg/DS_Store (which scripts/make-dmg-layout.py writes).
+mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/Safelight.app"
+ln -s /Applications "$STAGE/Applications"
+cp scripts/dmg/DS_Store "$STAGE/.DS_Store"
+hdiutil create -quiet -volname Safelight -srcfolder "$STAGE" -fs HFS+ -format UDZO "$DMG"
+rm -rf "$STAGE"
+echo "Safelight $VERSION ($(lipo -archs "$OUT/Safelight.app/Contents/MacOS/Safelight")): $DMG"
