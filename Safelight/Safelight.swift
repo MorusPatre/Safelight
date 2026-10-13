@@ -318,6 +318,7 @@ struct MenuView: View {
                 controller.isUserDraggingSlider = isEditing
             }
         )
+        .tint(.white)
         .disabled(controller.isAutoMode)
     }
 }
@@ -799,6 +800,7 @@ struct ScheduleEditor: View {
                                     controller.preview(isEditing ? keyframe.id : nil)
                                 }
                                 .labelsHidden()
+                                .tint(.white)
                                 .frame(width: layout.brightnessWidth)
                                 .padding(.leading, layout.gapBeforeBrightness)
                             }
