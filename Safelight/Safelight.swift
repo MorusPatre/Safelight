@@ -159,6 +159,7 @@ struct MenuView: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
+                            .tint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
                             .disabled(controller.isAutoMode)
                     }
                     .gridCellColumns(2)
@@ -773,6 +774,7 @@ struct ScheduleEditor: View {
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
+                                .tint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
                                 .padding(.leading, layout.gapBeforeColorFilters)
 
                             // Holding any of the sliders shows its keyframe on screen until it's let go
