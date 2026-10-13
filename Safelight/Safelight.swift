@@ -1232,6 +1232,7 @@ class ColorController: ObservableObject {
     @Published var isAutoMode: Bool = false {
         didSet {
             scheduledIsDarkAppearance = nil
+            scheduledDisplayBrightness = [:]
             if isAutoMode { applyAutoSettings() }
         }
     }
@@ -1240,7 +1241,11 @@ class ColorController: ObservableObject {
     /// changes, so an appearance chosen in System Settings or Control Center stays until then, rather
     /// than the screen fading back within the minute.
     private var scheduledIsDarkAppearance: Bool?
-    
+    /// Each display's brightness on the Schedule when it last set them, while they're adjusted
+    /// independently. A display stepped with the brightness keys stays where they put it until the
+    /// Schedule moves on, as the display macOS sets the brightness of does.
+    private var scheduledDisplayBrightness: [String: Float] = [:]
+
     var isUserDraggingSlider: Bool = false
     /// The keyframe on screen while one of its sliders in the Schedule window is held down. Meanwhile
     /// the settings above aren't written to the system or read back from it, so they're what comes back.
@@ -1252,6 +1257,8 @@ class ColorController: ObservableObject {
     /// The displays the Mac sets the brightness of itself, which a slider follows as the system changes it
     private var displaysWithSystemBrightness: Set<CGDirectDisplayID> = []
     private var brightnessFollowers: [CGDirectDisplayID: BrightnessFollower] = [:]
+    /// Where the brightness keys have put each display whose slider is still easing over to it
+    private var brightnessKeyTargets: [String: Float] = [:]
 
     /// The display the Brightness slider follows while the displays have one brightness: the main
     /// display, or if it's dimmed in software, the first that the Mac sets the brightness of itself
@@ -1344,10 +1351,19 @@ class ColorController: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.applyAutoSettings()
         }
-        
+
+        // While the displays are adjusted independently, the brightness keys set the one under the pointer
+        BrightnessKeys.shared.handlePress = { [weak self] isUp, isFine in
+            self?.brightnessKeyPressed(isUp: isUp, isFine: isFine) ?? false
+        }
+        if adjustsDisplaysIndependently {
+            BrightnessKeys.shared.start(askingPermission: false)
+        }
+
         // 🚀 UPGRADE: 120 FPS polling (0.0083 seconds)
         let smoothSyncTimer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
             self?.syncWithSystemBrightness()
+            self?.easeTowardBrightnessKeyTargets()
         }
         RunLoop.main.add(smoothSyncTimer, forMode: .common)
         self.syncTimer = smoothSyncTimer
@@ -1382,6 +1398,40 @@ class ColorController: ObservableObject {
         brightnessFollowers[displayID] = follower
     }
 
+    /// Steps the display under the pointer the way macOS steps the one it sets the brightness of: by a
+    /// sixteenth, or a quarter of that with Option-Shift, from between two steps to the next one along.
+    /// Returns false to leave the key to macOS: while the displays have one brightness, as they all
+    /// follow the display macOS sets, and when that display is under the pointer and its only one.
+    private func brightnessKeyPressed(isUp: Bool, isFine: Bool) -> Bool {
+        guard adjustsDisplaysIndependently,
+              let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }),
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let display = displays.first(where: { $0.id == number.uint32Value }),
+              displaysWithSystemBrightness != [display.id] else { return false }
+
+        let steps: Float = isFine ? 64 : 16
+        let current = brightnessKeyTargets[display.key] ?? self[brightnessOf: display.key]
+        let step = isUp ? (current * steps + 0.01).rounded(.down) + 1 : (current * steps - 0.01).rounded(.up) - 1
+        brightnessKeyTargets[display.key] = min(max(step / steps, 0), 1)
+        return true
+    }
+
+    /// Moves each slider the brightness keys have stepped a frame further over to where they put it,
+    /// easing over as a slider following a key press on the display macOS sets does. Holding a slider
+    /// stops them where they are.
+    private func easeTowardBrightnessKeyTargets() {
+        guard !brightnessKeyTargets.isEmpty else { return }
+        guard !isUserDraggingSlider, previewedKeyframeID == nil else {
+            brightnessKeyTargets = [:]
+            return
+        }
+        for (display, target) in brightnessKeyTargets {
+            let brightness = BrightnessFollower.ease(from: self[brightnessOf: display], to: target)
+            self[brightnessOf: display] = brightness
+            if brightness == target { brightnessKeyTargets[display] = nil }
+        }
+    }
+
     /// A display's brightness while the displays are adjusted independently, which is `brightness`
     /// until it's been set
     subscript(brightnessOf display: String) -> Float {
@@ -1390,14 +1440,24 @@ class ColorController: ObservableObject {
     }
 
     /// The displays carry on from where they are: split, each starts at the brightness they all had,
-    /// and joined, they all take the brightness of the one the Brightness slider follows.
+    /// and joined, they all take the brightness of the one the Brightness slider follows. Split, the
+    /// brightness keys are caught as well, with permission, which macOS asks for the first time.
     private func displayAdjustmentChanged() {
         UserDefaults.standard.set(adjustsDisplaysIndependently, forKey: Self.adjustsDisplaysIndependentlyDefaultsKey)
         brightnessFollowers = [:]
+        brightnessKeyTargets = [:]
+        scheduledDisplayBrightness = [:]
         if adjustsDisplaysIndependently {
             displayBrightness = Dictionary(displays.map { ($0.key, brightness) }) { first, _ in first }
-        } else if let display = displays.first(where: { $0.id == leadDisplay }) ?? displays.first {
-            brightness = self[brightnessOf: display.key]
+            // After the switch has redrawn, as macOS's request for permission comes up over it
+            DispatchQueue.main.async { [weak self] in
+                if self?.adjustsDisplaysIndependently == true { BrightnessKeys.shared.start(askingPermission: true) }
+            }
+        } else {
+            BrightnessKeys.shared.stop()
+            if let display = displays.first(where: { $0.id == leadDisplay }) ?? displays.first {
+                brightness = self[brightnessOf: display.key]
+            }
         }
         applyAutoSettings()
     }
@@ -1434,7 +1494,12 @@ class ColorController: ObservableObject {
         self.isColorFilterOn = settings.isColorFilterOn
         self.brightness = settings.brightness
         if adjustsDisplaysIndependently {
-            self.displayBrightness = Dictionary(displays.map { ($0.key, settings.brightness(of: $0.key)) }) { first, _ in first }
+            let scheduled = Dictionary(displays.map { ($0.key, settings.brightness(of: $0.key)) }) { first, _ in first }
+            // One the Schedule hasn't moved on for stays where it is, which is elsewhere if the brightness keys stepped it
+            self.displayBrightness = Dictionary(uniqueKeysWithValues: scheduled.map { display, brightness in
+                (display, scheduledDisplayBrightness[display] == brightness ? displayBrightness[display] ?? brightness : brightness)
+            })
+            scheduledDisplayBrightness = scheduled
         }
         if settings.isDarkAppearance != scheduledIsDarkAppearance {
             scheduledIsDarkAppearance = settings.isDarkAppearance
@@ -1607,6 +1672,7 @@ class ColorController: ObservableObject {
     func reset() {
         isAutoMode = false
         brightnessFollowers = [:]
+        brightnessKeyTargets = [:]
         isColorFilterOn = false
         brightness = 1.0
         displayBrightness = [:]
@@ -1660,29 +1726,8 @@ struct BrightnessFollower {
         
         // 2. Process the ease-out animation if we have a target
         if let target = targetSystemBrightness {
-            let diff = target - current
-            
-            // Snap to the target once we are visually indistinguishable from it
-            if abs(diff) < 0.002 {
-                newBrightness = target
-                targetSystemBrightness = nil
-            } else {
-                var step = diff * 0.12
-                let minSpeed: Float = 0.002
-                
-                if abs(step) < minSpeed {
-                    step = diff > 0 ? minSpeed : -minSpeed
-                }
-                
-                // CRITICAL FIX: Prevent Overshoot
-                // This stops the minSpeed from making the slider vibrate/jitter at the very end
-                if abs(step) > abs(diff) {
-                    step = diff
-                }
-                
-                newBrightness = current + step
-            }
-            
+            newBrightness = Self.ease(from: current, to: target)
+            if newBrightness == target { targetSystemBrightness = nil }
         } else if stepChange <= 0.001 {
             // 3. Not animating, and no native movement this frame.
             // Clean up any microscopic drift to ensure 100% sync.
@@ -1692,6 +1737,29 @@ struct BrightnessFollower {
             }
         }
         return newBrightness
+    }
+
+    /// One frame of a slider's ease-out from `current` over to `target`, which it lands on exactly.
+    static func ease(from current: Float, to target: Float) -> Float {
+        let diff = target - current
+
+        // Snap to the target once we are visually indistinguishable from it
+        if abs(diff) < 0.002 { return target }
+
+        var step = diff * 0.12
+        let minSpeed: Float = 0.002
+
+        if abs(step) < minSpeed {
+            step = diff > 0 ? minSpeed : -minSpeed
+        }
+
+        // CRITICAL FIX: Prevent Overshoot
+        // This stops the minSpeed from making the slider vibrate/jitter at the very end
+        if abs(step) > abs(diff) {
+            step = diff
+        }
+
+        return current + step
     }
 }
 
@@ -1950,6 +2018,95 @@ class GammaManager {
         return (0..<tableSize).map { i in
             Float(i) / Float(tableSize - 1) * brightness
         }
+    }
+}
+
+// MARK: - Brightness Keys
+/// Catches the brightness keys before macOS acts on them, so a key can set a display macOS doesn't.
+/// Catching keys takes permission in System Settings › Privacy & Security › Accessibility; until
+/// it's given, they're left to macOS.
+final class BrightnessKeys {
+    static let shared = BrightnessKeys()
+
+    /// What a press does: brightness up or down, a quarter step (with Option-Shift) or not. Returns
+    /// whether it set a display, in which case macOS doesn't see the key.
+    var handlePress: (_ isUp: Bool, _ isFine: Bool) -> Bool = { _, _ in false }
+
+    private var tap: CFMachPort?
+    private var tapSource: CFRunLoopSource?
+    /// Checks for permission while it's waited for
+    private var permissionTimer: Timer?
+    /// The keys whose press was handled here, so their release is kept from macOS as well
+    private var handledKeys: Set<Int32> = []
+
+    /// Starts catching the keys, or once there's permission, if there isn't yet. `askingPermission`
+    /// puts up macOS's request for it, which leads to System Settings.
+    func start(askingPermission: Bool) {
+        guard tap == nil else { return }
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: askingPermission] as CFDictionary
+
+        // At the head of the session's taps, where the keys arrive before macOS acts on them
+        guard AXIsProcessTrustedWithOptions(options), let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+            eventsOfInterest: CGEventMask(1 << NX_SYSDEFINED),
+            callback: { _, type, event, _ in
+                BrightnessKeys.shared.handle(type, event) ? nil : Unmanaged.passUnretained(event)
+            },
+            userInfo: nil
+        ) else {
+            permissionTimer = permissionTimer ?? Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                self?.start(askingPermission: false)
+            }
+            return
+        }
+        permissionTimer?.invalidate()
+        permissionTimer = nil
+
+        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        self.tap = tap
+        tapSource = source
+    }
+
+    func stop() {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
+        guard let tap else { return }
+        CGEvent.tapEnable(tap: tap, enable: false)
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes)
+        CFMachPortInvalidate(tap)
+        self.tap = nil
+        tapSource = nil
+        handledKeys = []
+    }
+
+    /// Whether `event` is a brightness key dealt with here. Presses with Option alone (which opens
+    /// Displays settings), Control or Command go on to macOS.
+    private func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        if type == .tapDisabledByTimeout, let tap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            return false
+        }
+        guard type.rawValue == UInt32(NX_SYSDEFINED),
+              let keyEvent = NSEvent(cgEvent: event),
+              Int32(keyEvent.subtype.rawValue) == NX_SUBTYPE_AUX_CONTROL_BUTTONS else { return false }
+        let key = Int32((keyEvent.data1 & 0xFFFF0000) >> 16)
+        guard key == NX_KEYTYPE_BRIGHTNESS_UP || key == NX_KEYTYPE_BRIGHTNESS_DOWN else { return false }
+
+        // 0xA is a press (or its repeat while the key is held), 0xB a release
+        guard (keyEvent.data1 & 0xFF00) >> 8 == 0xA else {
+            return handledKeys.remove(key) != nil
+        }
+        let modifiers = keyEvent.modifierFlags
+        let isFine = modifiers.contains([.option, .shift])
+        guard !modifiers.contains(.control), !modifiers.contains(.command),
+              isFine || !modifiers.contains(.option),
+              handlePress(key == NX_KEYTYPE_BRIGHTNESS_UP, isFine) else {
+            handledKeys.remove(key)
+            return false
+        }
+        handledKeys.insert(key)
+        return true
     }
 }
 
