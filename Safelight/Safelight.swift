@@ -202,21 +202,12 @@ struct MenuView: View {
                 // This drives System Settings › Displays' Brightness: one slider for every display, or
                 // while they're adjusted independently, one for each, under its name.
                 if controller.independentDisplays.isEmpty {
-                    GridRow(alignment: .top) {
+                    GridRow {
                         Text(SystemStrings.brightness)
                             .fontWeight(.medium)
                             .frame(minWidth: 75, alignment: .leading)
-                            .padding(.top, 4)
 
-                        VStack(spacing: 2) {
-                            brightnessSlider(value: $controller.brightness)
-
-                            HStack {
-                                Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
-                                Spacer()
-                                Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
-                            }
-                        }
+                        brightnessSlider(value: $controller.brightness)
                     }
                 } else {
                     GridRow(alignment: .firstTextBaseline) {
