@@ -199,8 +199,8 @@ struct MenuView: View {
                     .padding(.vertical, 4)
 
                 // --- BRIGHTNESS SECTION ---
-                // One slider for every display, or while they're adjusted independently, one for each,
-                // under its name
+                // This drives System Settings › Displays' Brightness: one slider for every display, or
+                // while they're adjusted independently, one for each, under its name.
                 if controller.independentDisplays.isEmpty {
                     GridRow(alignment: .top) {
                         Text(SystemStrings.brightness)
@@ -210,7 +210,12 @@ struct MenuView: View {
 
                         VStack(spacing: 2) {
                             brightnessSlider(value: $controller.brightness)
-                            lowAndHigh
+
+                            HStack {
+                                Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
+                                Spacer()
+                                Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
+                            }
                         }
                     }
                 } else {
@@ -228,8 +233,6 @@ struct MenuView: View {
                                     brightnessSlider(value: $controller[brightnessOf: display.key])
                                 }
                             }
-                            lowAndHigh
-                                .padding(.top, -6)
                         }
                     }
                 }
@@ -249,6 +252,9 @@ struct MenuView: View {
                         .gridCellColumns(2)
                     }
                 }
+
+                Divider()
+                    .padding(.vertical, 4)
 
                 // --- APPEARANCE SECTION ---
                 // This drives System Settings › Appearance (Light and Dark).
@@ -300,14 +306,6 @@ struct MenuView: View {
         )
         .tint(.white)
         .disabled(controller.isAutoMode)
-    }
-
-    private var lowAndHigh: some View {
-        HStack {
-            Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
-            Spacer()
-            Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
-        }
     }
 }
 
