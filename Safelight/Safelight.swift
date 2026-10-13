@@ -232,6 +232,7 @@ struct MenuView: View {
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
+                                .tint(Color(hue: 42 / 360, saturation: 0.55, brightness: 0.8))  // a muted gold
                         }
                         .gridCellColumns(2)
                     }
