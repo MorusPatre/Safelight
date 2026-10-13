@@ -171,17 +171,9 @@ struct MenuView: View {
                         .frame(minWidth: 75, alignment: .leading)
                         .padding(.top, 4)
 
-                    VStack(spacing: 2) {
-                        Slider(value: $controller.intensity, in: ColorFilterManager.shared.intensityRange)
-                            .tint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
-                            .disabled(controller.isAutoMode)
-
-                        HStack {
-                            Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
-                            Spacer()
-                            Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
-                        }
-                    }
+                    intensitySlider
+                        .tint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
+                        .disabled(controller.isAutoMode)
                 }
 
                 // 3. TINT
@@ -285,6 +277,37 @@ struct MenuView: View {
         .padding()
         .frame(width: 320)
         .animation(.easeInOut, value: controller.isAutoMode)
+    }
+
+    /// System Settings' Intensity slider: seven tick marks evenly spaced from end to end, with Low and
+    /// High as the names of the first and last. Before macOS 26, which has no tick labels, Low and High
+    /// go under the ends of a plain slider.
+    @ViewBuilder
+    private var intensitySlider: some View {
+        let range = ColorFilterManager.shared.intensityRange
+        if #available(macOS 26.0, *) {
+            let spacing = (range.upperBound - range.lowerBound) / 6
+            Slider(value: $controller.intensity, in: range) {
+                Text(SystemStrings.intensity)
+            } ticks: {
+                SliderTick(SystemStrings.low, range.lowerBound)
+                SliderTickContentForEach((1...5).map { range.lowerBound + spacing * Float($0) }, id: \.self) {
+                    SliderTick($0)
+                }
+                SliderTick(SystemStrings.high, range.upperBound)
+            }
+            .labelsHidden()
+        } else {
+            VStack(spacing: 2) {
+                Slider(value: $controller.intensity, in: range)
+
+                HStack {
+                    Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
+                    Spacer()
+                    Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
+                }
+            }
+        }
     }
 
     private func brightnessSlider(value: Binding<Float>) -> some View {
