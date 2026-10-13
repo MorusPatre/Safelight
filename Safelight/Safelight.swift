@@ -2029,15 +2029,20 @@ final class BrightnessKeys {
     static let shared = BrightnessKeys()
 
     /// What a press does: brightness up or down, a quarter step (with Option-Shift) or not. Returns
-    /// whether it set a display, in which case macOS doesn't see the key.
+    /// whether it set a display, in which case macOS doesn't see the key. Called on the main thread.
     var handlePress: (_ isUp: Bool, _ isFine: Bool) -> Bool = { _, _ in false }
 
+    /// Apple's keyboards send the brightness keys as these key codes; others send them as media keys,
+    /// like the volume keys
+    private static let brightnessUpKeyCode: Int64 = 144
+    private static let brightnessDownKeyCode: Int64 = 145
+
     private var tap: CFMachPort?
-    private var tapSource: CFRunLoopSource?
     /// Checks for permission while it's waited for
     private var permissionTimer: Timer?
-    /// The keys whose press was handled here, so their release is kept from macOS as well
-    private var handledKeys: Set<Int32> = []
+    /// The keys (up or down) whose press was handled here, so their release is kept from macOS as
+    /// well. Only touched on the tap's thread.
+    private var handledKeys: Set<Bool> = []
 
     /// Starts catching the keys, or once there's permission, if there isn't yet. `askingPermission`
     /// puts up macOS's request for it, which leads to System Settings.
@@ -2046,9 +2051,9 @@ final class BrightnessKeys {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: askingPermission] as CFDictionary
 
         // At the head of the session's taps, where the keys arrive before macOS acts on them
+        let keys = CGEventMask(1 << NX_SYSDEFINED) | CGEventMask(1 << CGEventType.keyDown.rawValue) | CGEventMask(1 << CGEventType.keyUp.rawValue)
         guard AXIsProcessTrustedWithOptions(options), let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-            eventsOfInterest: CGEventMask(1 << NX_SYSDEFINED),
+            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap, eventsOfInterest: keys,
             callback: { _, type, event, _ in
                 BrightnessKeys.shared.handle(type, event) ? nil : Unmanaged.passUnretained(event)
             },
@@ -2061,11 +2066,18 @@ final class BrightnessKeys {
         }
         permissionTimer?.invalidate()
         permissionTimer = nil
-
-        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         self.tap = tap
-        tapSource = source
+
+        // Every key goes through the tap, so it runs on a thread of its own: typing never waits on
+        // the main thread, which only hears about the brightness keys. The thread ends with the tap.
+        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        let thread = Thread {
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CFRunLoopRun()
+        }
+        thread.name = "Brightness Keys"
+        thread.qualityOfService = .userInteractive
+        thread.start()
     }
 
     func stop() {
@@ -2073,40 +2085,51 @@ final class BrightnessKeys {
         permissionTimer = nil
         guard let tap else { return }
         CGEvent.tapEnable(tap: tap, enable: false)
-        CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes)
-        CFMachPortInvalidate(tap)
+        CFMachPortInvalidate(tap) // which takes it off its thread's run loop, and so ends the thread
         self.tap = nil
-        tapSource = nil
-        handledKeys = []
     }
 
     /// Whether `event` is a brightness key dealt with here. Presses with Option alone (which opens
     /// Displays settings), Control or Command go on to macOS.
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
-        if type == .tapDisabledByTimeout, let tap {
-            CGEvent.tapEnable(tap: tap, enable: true)
+        if type == .tapDisabledByTimeout {
+            DispatchQueue.main.async { [self] in
+                if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            }
             return false
+        }
+        guard let (isUp, isPress) = brightnessKey(type, event) else { return false }
+        guard isPress else { return handledKeys.remove(isUp) != nil }
+
+        let modifiers = event.flags
+        let isFine = modifiers.contains([.maskAlternate, .maskShift])
+        guard !modifiers.contains(.maskControl), !modifiers.contains(.maskCommand),
+              isFine || !modifiers.contains(.maskAlternate),
+              DispatchQueue.main.sync(execute: { handlePress(isUp, isFine) }) else {
+            handledKeys.remove(isUp)
+            return false
+        }
+        handledKeys.insert(isUp)
+        return true
+    }
+
+    /// Which brightness key `event` is, if it's one, and whether it's a press (or its repeat while
+    /// the key is held) or a release.
+    private func brightnessKey(_ type: CGEventType, _ event: CGEvent) -> (isUp: Bool, isPress: Bool)? {
+        if type == .keyDown || type == .keyUp {
+            switch event.getIntegerValueField(.keyboardEventKeycode) {
+            case Self.brightnessUpKeyCode: return (true, type == .keyDown)
+            case Self.brightnessDownKeyCode: return (false, type == .keyDown)
+            default: return nil
+            }
         }
         guard type.rawValue == UInt32(NX_SYSDEFINED),
               let keyEvent = NSEvent(cgEvent: event),
-              Int32(keyEvent.subtype.rawValue) == NX_SUBTYPE_AUX_CONTROL_BUTTONS else { return false }
+              Int32(keyEvent.subtype.rawValue) == NX_SUBTYPE_AUX_CONTROL_BUTTONS else { return nil }
         let key = Int32((keyEvent.data1 & 0xFFFF0000) >> 16)
-        guard key == NX_KEYTYPE_BRIGHTNESS_UP || key == NX_KEYTYPE_BRIGHTNESS_DOWN else { return false }
-
-        // 0xA is a press (or its repeat while the key is held), 0xB a release
-        guard (keyEvent.data1 & 0xFF00) >> 8 == 0xA else {
-            return handledKeys.remove(key) != nil
-        }
-        let modifiers = keyEvent.modifierFlags
-        let isFine = modifiers.contains([.option, .shift])
-        guard !modifiers.contains(.control), !modifiers.contains(.command),
-              isFine || !modifiers.contains(.option),
-              handlePress(key == NX_KEYTYPE_BRIGHTNESS_UP, isFine) else {
-            handledKeys.remove(key)
-            return false
-        }
-        handledKeys.insert(key)
-        return true
+        guard key == NX_KEYTYPE_BRIGHTNESS_UP || key == NX_KEYTYPE_BRIGHTNESS_DOWN else { return nil }
+        // 0xA is a press, 0xB a release
+        return (key == NX_KEYTYPE_BRIGHTNESS_UP, (keyEvent.data1 & 0xFF00) >> 8 == 0xA)
     }
 }
 
