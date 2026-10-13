@@ -320,7 +320,7 @@ struct MenuView: View {
         )
         .tint(.white)
         // A soft shadow sets the white slider apart from a light background
-        .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+        .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
         .disabled(controller.isAutoMode)
     }
 }
@@ -803,7 +803,7 @@ struct ScheduleEditor: View {
                                 }
                                 .labelsHidden()
                                 .tint(.white)
-                                .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+                                .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
                                 .frame(width: layout.brightnessWidth)
                                 .padding(.leading, layout.gapBeforeBrightness)
                             }
