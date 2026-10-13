@@ -199,28 +199,54 @@ struct MenuView: View {
                     .padding(.vertical, 4)
 
                 // --- BRIGHTNESS SECTION ---
-                GridRow(alignment: .top) {
-                    Text(SystemStrings.brightness)
-                        .fontWeight(.medium)
-                        .frame(minWidth: 75, alignment: .leading)
-                        .padding(.top, 4)
+                // One slider for every display, or while they're adjusted independently, one for each,
+                // under its name
+                if controller.independentDisplays.isEmpty {
+                    GridRow(alignment: .top) {
+                        Text(SystemStrings.brightness)
+                            .fontWeight(.medium)
+                            .frame(minWidth: 75, alignment: .leading)
+                            .padding(.top, 4)
 
-                    VStack(spacing: 2) {
-                        Slider(
-                            value: $controller.brightness,
-                            in: 0.0...1.0,
-                            onEditingChanged: { isEditing in
-                                controller.isUserDraggingSlider = isEditing
-                            }
-                        )
-                        .tint(.white)
-                        .disabled(controller.isAutoMode)
-
-                        HStack {
-                            Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
-                            Spacer()
-                            Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
+                        VStack(spacing: 2) {
+                            brightnessSlider(value: $controller.brightness)
+                            lowAndHigh
                         }
+                    }
+                } else {
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text(SystemStrings.brightness)
+                            .fontWeight(.medium)
+                            .frame(minWidth: 75, alignment: .leading)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(controller.independentDisplays) { display in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(display.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                    brightnessSlider(value: $controller[brightnessOf: display.key])
+                                }
+                            }
+                            lowAndHigh
+                                .padding(.top, -6)
+                        }
+                    }
+                }
+
+                // Only there with more than one display to adjust, unless it's on already
+                if controller.displays.count > 1 || controller.adjustsDisplaysIndependently {
+                    GridRow {
+                        HStack {
+                            Text(SystemStrings.adjustIndependently)
+                                .fontWeight(.medium)
+                            Spacer()
+                            Toggle(SystemStrings.adjustIndependently, isOn: $controller.adjustsDisplaysIndependently)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                        }
+                        .gridCellColumns(2)
                     }
                 }
 
@@ -262,6 +288,26 @@ struct MenuView: View {
         .padding()
         .frame(width: 320)
         .animation(.easeInOut, value: controller.isAutoMode)
+    }
+
+    private func brightnessSlider(value: Binding<Float>) -> some View {
+        Slider(
+            value: value,
+            in: 0.0...1.0,
+            onEditingChanged: { isEditing in
+                controller.isUserDraggingSlider = isEditing
+            }
+        )
+        .tint(.white)
+        .disabled(controller.isAutoMode)
+    }
+
+    private var lowAndHigh: some View {
+        HStack {
+            Text(SystemStrings.low).font(.system(size: 10)).foregroundColor(.secondary)
+            Spacer()
+            Text(SystemStrings.high).font(.system(size: 10)).foregroundColor(.secondary)
+        }
     }
 }
 
@@ -624,10 +670,20 @@ final class ScheduleWindow: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    // The window grows downwards as rows are added, so one near the bottom of the screen moves up to stay on it
+    // The window grows downwards as rows are added, and to the right as columns are, so one near the
+    // bottom or right of the screen moves to stay on it
     func windowDidResize(_ notification: Notification) {
-        guard let window, let visibleFrame = window.screen?.visibleFrame, window.frame.minY < visibleFrame.minY else { return }
-        window.setFrameOrigin(NSPoint(x: window.frame.minX, y: visibleFrame.minY))
+        guard let window, let visibleFrame = window.screen?.visibleFrame else { return }
+        var origin = window.frame.origin
+        if window.frame.minY < visibleFrame.minY {
+            origin.y = visibleFrame.minY
+        }
+        if window.frame.maxX > visibleFrame.maxX {
+            origin.x = max(visibleFrame.maxX - window.frame.width, visibleFrame.minX)
+        }
+        if origin != window.frame.origin {
+            window.setFrameOrigin(origin)
+        }
     }
 
     // Undo and Redo (⌘Z and ⇧⌘Z) in the window take back and put back changes to the schedule
@@ -655,7 +711,7 @@ struct ScheduleEditor: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: layout.boxSpacing) {
-                ScheduleDayView(schedule: controller.schedule)
+                ScheduleDayView(schedule: controller.schedule, displays: brightnessColumns.map { $0?.key })
                     .scheduleBox(padding: layout.boxPadding)
 
                 // Each column after the first is set off from the one before by its own gap
@@ -668,8 +724,10 @@ struct ScheduleEditor: View {
                             .padding(.leading, layout.gapBeforeIntensity)
                         Text(SystemStrings.tint)
                             .padding(.leading, layout.gapBeforeTint)
-                        Text(SystemStrings.brightness)
-                            .padding(.leading, layout.gapBeforeBrightness)
+                        ForEach(brightnessColumns, id: \.self) { display in
+                            Text(display?.name ?? SystemStrings.brightness)
+                                .padding(.leading, layout.gapBeforeBrightness)
+                        }
                         Text(SystemStrings.appearance)
                             .padding(.leading, layout.gapBeforeAppearance)
 
@@ -723,15 +781,17 @@ struct ScheduleEditor: View {
                             .frame(width: layout.tintWidth)
                             .padding(.leading, layout.gapBeforeTint)
 
-                            Slider(value: $keyframe.brightness, in: 0.0...1.0) {
-                                Text(SystemStrings.brightness)
-                            } onEditingChanged: { isEditing in
-                                controller.preview(isEditing ? keyframe.id : nil)
+                            ForEach(brightnessColumns, id: \.self) { display in
+                                Slider(value: display.map { $keyframe[brightnessOf: $0.key] } ?? $keyframe.brightness, in: 0.0...1.0) {
+                                    Text(display?.name ?? SystemStrings.brightness)
+                                } onEditingChanged: { isEditing in
+                                    controller.preview(isEditing ? keyframe.id : nil)
+                                }
+                                .labelsHidden()
+                                .tint(.white)
+                                .frame(width: layout.brightnessWidth)
+                                .padding(.leading, layout.gapBeforeBrightness)
                             }
-                            .labelsHidden()
-                            .tint(.white)
-                            .frame(width: layout.brightnessWidth)
-                            .padding(.leading, layout.gapBeforeBrightness)
 
                             AppearanceSegments(isDark: $keyframe.isDarkAppearance)
                                 .fixedSize()
@@ -764,6 +824,12 @@ struct ScheduleEditor: View {
         .fixedSize()
     }
 
+    /// A Brightness column for each display while they're adjusted independently, headed by its name,
+    /// or one for all of them
+    private var brightnessColumns: [Display?] {
+        controller.independentDisplays.isEmpty ? [nil] : controller.independentDisplays
+    }
+
     // As tall as its rows, until the window fills the height of the screen, and then they scroll
     private var maxHeight: CGFloat {
         guard let screen = NSScreen.main else { return .infinity }
@@ -789,9 +855,12 @@ struct ScheduleEditor: View {
 }
 
 /// The day the Schedule makes, from midnight to midnight: a strip of roughly how white looks on screen
-/// through it, a line at the current time, and a dot under each keyframe.
+/// through it, a line at the current time, and a dot under each keyframe. While the displays are
+/// adjusted independently, the strip has a band for each, from the top down in the order of their columns.
 struct ScheduleDayView: View {
     let schedule: [ColorKeyframe]
+    /// The `Display.key` of each band, or nil for one band for all displays
+    let displays: [String?]
 
     private let stripHeight: CGFloat = 36
 
@@ -803,9 +872,13 @@ struct ScheduleDayView: View {
 
                 context.drawLayer { strip in
                     strip.clip(to: outline)
+                    let bandHeight = stripHeight / CGFloat(max(displays.count, 1))
                     for x in 0..<Int(size.width.rounded(.up)) {
                         guard let settings = ColorKeyframe.settings(in: schedule, at: Double(x) / size.width * 1440) else { continue }
-                        strip.fill(Path(CGRect(x: CGFloat(x), y: 0, width: 1, height: stripHeight)), with: .color(settings.previewColor))
+                        for (band, display) in displays.enumerated() {
+                            let pixel = CGRect(x: CGFloat(x), y: CGFloat(band) * bandHeight, width: 1, height: bandHeight)
+                            strip.fill(Path(pixel), with: .color(settings.previewColor(ofDisplay: display)))
+                        }
                     }
 
                     let now = Calendar.current.dateComponents([.hour, .minute], from: timeline.date)
@@ -1117,6 +1190,21 @@ class ColorController: ObservableObject {
     @Published var intensity: Float = 1.0 { didSet { colorSliderChanged() } }
     @Published var tint: Float = 0.0      { didSet { colorSliderChanged() } }
     @Published var brightness: Float = 1.0 { didSet { updateBrightness() } }
+    /// Each display's own brightness, by its `Display.key`, while the displays are adjusted independently
+    @Published var displayBrightness: [String: Float] = [:] { didSet { updateBrightness() } }
+
+    /// The displays the Mac draws to, kept up to date as they're connected, disconnected and arranged
+    @Published private(set) var displays: [Display] = Display.connected()
+    /// Whether each display has a brightness of its own, in the Schedule too, rather than all of them
+    /// having one. Saved as it's changed.
+    @Published var adjustsDisplaysIndependently = UserDefaults.standard.bool(forKey: ColorController.adjustsDisplaysIndependentlyDefaultsKey) {
+        didSet { displayAdjustmentChanged() }
+    }
+    private static let adjustsDisplaysIndependentlyDefaultsKey = "adjustsDisplaysIndependently"
+
+    /// The displays with a brightness of their own, in the order their sliders are shown, or none while
+    /// they all have one
+    var independentDisplays: [Display] { adjustsDisplaysIndependently ? displays : [] }
 
     // Mirror of the system appearance: Dark or Light, whether it was chosen or Auto switched to it.
     @Published private(set) var isDarkAppearance: Bool = false
@@ -1139,12 +1227,21 @@ class ColorController: ObservableObject {
     /// The keyframe on screen while one of its sliders in the Schedule window is held down. Meanwhile
     /// the settings above aren't written to the system or read back from it, so they're what comes back.
     private var previewedKeyframeID: ColorKeyframe.ID?
-    private var isSyncingWithSystem: Bool = false
+    /// The display whose slider is being moved to where the system has set it, so it isn't set again
+    private var syncingDisplay: CGDirectDisplayID?
     private var isSyncingColorFilter: Bool = false
     
-    private var targetSystemBrightness: Float? = nil
-    private var lastSystemBrightness: Float = -1.0
-    private var lastNativeUpdateTime: TimeInterval = 0
+    /// The displays the Mac sets the brightness of itself, which a slider follows as the system changes it
+    private var displaysWithSystemBrightness: Set<CGDirectDisplayID> = []
+    private var brightnessFollowers: [CGDirectDisplayID: BrightnessFollower] = [:]
+
+    /// The display the Brightness slider follows while the displays have one brightness: the main
+    /// display, or if it's dimmed in software, the first that the Mac sets the brightness of itself
+    private var leadDisplay: CGDirectDisplayID? {
+        let mainDisplay = CGMainDisplayID()
+        if displaysWithSystemBrightness.contains(mainDisplay) { return mainDisplay }
+        return displays.first { displaysWithSystemBrightness.contains($0.id) }?.id
+    }
     
     private var timer: Timer?
     private var syncTimer: Timer?
@@ -1187,9 +1284,21 @@ class ColorController: ObservableObject {
     }
 
     init() {
-        if let nativeBrightness = GammaManager.shared.getNativeBrightness() {
+        displaysWithSystemBrightness = Set(displays.map(\.id).filter(GammaManager.shared.canSetBrightness))
+        // Each display's slider starts where the display is, and the displays dimmed in software aren't
+        // yet. Set first, as setting either sets the displays, and with only `brightness` they'd all take it.
+        if adjustsDisplaysIndependently {
+            self.displayBrightness = Dictionary(displays.map { ($0.key, GammaManager.shared.getNativeBrightness(of: $0.id) ?? 1.0) }) { first, _ in first }
+        }
+        if let leadDisplay, let nativeBrightness = GammaManager.shared.getNativeBrightness(of: leadDisplay) {
             self.brightness = nativeBrightness
-            self.lastSystemBrightness = nativeBrightness
+        }
+        
+        // Follow displays being connected, disconnected and rearranged
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.displaysDidChange()
         }
         
         // Follow changes made in System Settings (or anywhere else) to the color filter
@@ -1228,83 +1337,69 @@ class ColorController: ObservableObject {
     
     func syncWithSystemBrightness() {
         guard !isAutoMode, !isUserDraggingSlider, previewedKeyframeID == nil else {
-            targetSystemBrightness = nil
+            brightnessFollowers = [:]
             return 
         }
         
-        if let systemBrightness = GammaManager.shared.getNativeBrightness() {
-            let stepChange = abs(systemBrightness - lastSystemBrightness)
-            
-            // 1. Did the native brightness just move?
-            if stepChange > 0.001 {
-                let now = Date().timeIntervalSinceReferenceDate
-                let timeSinceLastUpdate = now - lastNativeUpdateTime
-                
-                lastNativeUpdateTime = now
-                lastSystemBrightness = systemBrightness
-                
-                // If updates are firing rapidly (< 50ms apart), the user is continuously dragging.
-                if timeSinceLastUpdate < 0.05 {
-                    // Abort any ongoing animations and snap instantly to perfectly follow the drag!
-                    self.targetSystemBrightness = nil
-                    self.isSyncingWithSystem = true
-                    self.brightness = systemBrightness
-                    self.isSyncingWithSystem = false
-                } else {
-                    // The value changed after being idle. This is the first frame of a new interaction.
-                    if stepChange > 0.04 {
-                        // Large jump -> A Click or Keyboard Tap. Start the ease-out animation!
-                        self.targetSystemBrightness = systemBrightness
-                    } else {
-                        // Small jump -> The very beginning of a slow drag. Snap instantly.
-                        self.isSyncingWithSystem = true
-                        self.brightness = systemBrightness
-                        self.isSyncingWithSystem = false
-                    }
-                }
-            } 
-            
-            // 2. Process the ease-out animation if we have a target
-            if let target = targetSystemBrightness {
-                let diff = target - self.brightness
-                
-                // Snap to the target once we are visually indistinguishable from it
-                if abs(diff) < 0.002 {
-                    self.isSyncingWithSystem = true
-                    self.brightness = target
-                    self.isSyncingWithSystem = false
-                    self.targetSystemBrightness = nil
-                } else {
-                    self.isSyncingWithSystem = true
-                    
-                    var step = diff * 0.12
-                    let minSpeed: Float = 0.002
-                    
-                    if abs(step) < minSpeed {
-                        step = diff > 0 ? minSpeed : -minSpeed
-                    }
-                    
-                    // CRITICAL FIX: Prevent Overshoot
-                    // This stops the minSpeed from making the slider vibrate/jitter at the very end
-                    if abs(step) > abs(diff) {
-                        step = diff
-                    }
-                    
-                    self.brightness += step
-                    self.isSyncingWithSystem = false
-                }
-                
-            } else if stepChange <= 0.001 {
-                // 3. Not animating, and no native movement this frame.
-                // Clean up any microscopic drift to ensure 100% sync.
-                let delta = abs(self.brightness - systemBrightness)
-                if delta > 0.002 {
-                    self.isSyncingWithSystem = true
-                    self.brightness = systemBrightness
-                    self.isSyncingWithSystem = false
-                }
+        // Each display the Mac sets the brightness of moves its own slider, or while the displays have
+        // one brightness, the one the Brightness slider follows moves it
+        if adjustsDisplaysIndependently {
+            for display in displays where displaysWithSystemBrightness.contains(display.id) {
+                follow(display.id, from: self[brightnessOf: display.key]) { self[brightnessOf: display.key] = $0 }
             }
+        } else if let leadDisplay {
+            follow(leadDisplay, from: brightness) { brightness = $0 }
         }
+    }
+
+    /// Moves a slider at `current` after the brightness the system has set a display to.
+    private func follow(_ displayID: CGDirectDisplayID, from current: Float, by setBrightness: (Float) -> Void) {
+        guard let systemBrightness = GammaManager.shared.getNativeBrightness(of: displayID) else { return }
+        var follower = brightnessFollowers[displayID] ?? BrightnessFollower(systemBrightness: systemBrightness)
+        if let brightness = follower.follow(systemBrightness, from: current) {
+            syncingDisplay = displayID
+            setBrightness(brightness)
+            syncingDisplay = nil
+        }
+        brightnessFollowers[displayID] = follower
+    }
+
+    /// A display's brightness while the displays are adjusted independently, which is `brightness`
+    /// until it's been set
+    subscript(brightnessOf display: String) -> Float {
+        get { displayBrightness[display] ?? brightness }
+        set { displayBrightness[display] = newValue }
+    }
+
+    /// The displays carry on from where they are: split, each starts at the brightness they all had,
+    /// and joined, they all take the brightness of the one the Brightness slider follows.
+    private func displayAdjustmentChanged() {
+        UserDefaults.standard.set(adjustsDisplaysIndependently, forKey: Self.adjustsDisplaysIndependentlyDefaultsKey)
+        brightnessFollowers = [:]
+        if adjustsDisplaysIndependently {
+            displayBrightness = Dictionary(displays.map { ($0.key, brightness) }) { first, _ in first }
+        } else if let display = displays.first(where: { $0.id == leadDisplay }) ?? displays.first {
+            brightness = self[brightnessOf: display.key]
+        }
+        applyAutoSettings()
+    }
+
+    /// Lists the displays again, and sets them all again, as the system puts back the colors of a
+    /// display it changes. A display connected for the first time while they're adjusted independently
+    /// starts where it is.
+    private func displaysDidChange() {
+        displays = Display.connected()
+        displaysWithSystemBrightness = Set(displays.map(\.id).filter(GammaManager.shared.canSetBrightness))
+        brightnessFollowers = [:]
+        GammaManager.shared.reset()
+
+        let newDisplays = displays.filter { displayBrightness[$0.key] == nil }
+        if adjustsDisplaysIndependently && !newDisplays.isEmpty {
+            displayBrightness.merge(newDisplays.map { ($0.key, GammaManager.shared.getNativeBrightness(of: $0.id) ?? 1.0) }) { current, _ in current }
+        }
+        applyAutoSettings()
+        updateBrightness()
+        showPreview()
     }
     
     func applyAutoSettings() {
@@ -1320,6 +1415,9 @@ class ColorController: ObservableObject {
         self.intensity = settings.filterIntensity
         self.isColorFilterOn = settings.isColorFilterOn
         self.brightness = settings.brightness
+        if adjustsDisplaysIndependently {
+            self.displayBrightness = Dictionary(displays.map { ($0.key, settings.brightness(of: $0.key)) }) { first, _ in first }
+        }
         if settings.isDarkAppearance != scheduledIsDarkAppearance {
             scheduledIsDarkAppearance = settings.isDarkAppearance
             applyScheduledAppearance()
@@ -1334,13 +1432,14 @@ class ColorController: ObservableObject {
         let minute = (0..<48).lazy.map { (nextHalfHour + $0 * 30) % 1440 }.first { !taken.contains($0) } ?? nextHalfHour % 1440
 
         let settings = ColorKeyframe.settings(in: schedule, at: Double(minute))
-            ?? ColorKeyframe.Settings(intensity: isColorFilterOn ? intensity : 0, tint: tint, brightness: brightness, isDarkAppearance: isDarkAppearance)
+            ?? ColorKeyframe.Settings(intensity: isColorFilterOn ? intensity : 0, tint: tint, brightness: brightness, displayBrightness: displayBrightness, isDarkAppearance: isDarkAppearance)
         schedule.append(ColorKeyframe(
             minute: minute,
             isColorFilterOn: settings.isColorFilterOn,
             intensity: settings.filterIntensity,
             tint: settings.tint,
             brightness: settings.brightness,
+            displayBrightness: settings.displayBrightness,
             isDarkAppearance: settings.isDarkAppearance
         ))
     }
@@ -1396,7 +1495,7 @@ class ColorController: ObservableObject {
     private func showPreview() {
         guard let keyframe = schedule.first(where: { $0.id == previewedKeyframeID }) else { return }
         ColorFilterManager.shared.write(ColorFilterManager.State(isOn: keyframe.isColorFilterOn, hue: keyframe.tint / 360, intensity: keyframe.intensity))
-        GammaManager.shared.setGamma(brightness: keyframe.brightness)
+        GammaManager.shared.setBrightness(brightnessByDisplay(keyframe.brightness, keyframe.displayBrightness))
     }
 
     /// Dragging Intensity or Tint turns the filter on, the way raising Intensity from zero used to.
@@ -1425,7 +1524,15 @@ class ColorController: ObservableObject {
     
     func updateBrightness() {
         guard previewedKeyframeID == nil else { return }
-        GammaManager.shared.setGamma(brightness: brightness, skipHardwareUpdate: isSyncingWithSystem)
+        GammaManager.shared.setBrightness(brightnessByDisplay(brightness, displayBrightness), skippingHardwareOf: syncingDisplay)
+    }
+
+    /// Each display's brightness: `brightness` for all of them, or while they're adjusted independently,
+    /// each one's own from `displayBrightness`, if it has one.
+    private func brightnessByDisplay(_ brightness: Float, _ displayBrightness: [String: Float]) -> [CGDirectDisplayID: Float] {
+        Dictionary(displays.map { display in
+            (display.id, adjustsDisplaysIndependently ? displayBrightness[display.key] ?? brightness : brightness)
+        }) { first, _ in first }
     }
 
     /// Chooses Light or Dark in System Settings' order: the choice shows at once, the picker dims, and
@@ -1481,9 +1588,92 @@ class ColorController: ObservableObject {
     
     func reset() {
         isAutoMode = false
-        targetSystemBrightness = nil
+        brightnessFollowers = [:]
         isColorFilterOn = false
         brightness = 1.0
+        displayBrightness = [:]
+    }
+}
+
+/// Follows a display's brightness as the system changes it (with the brightness keys, Control Center
+/// or System Settings) for a slider to show: it keeps up while the system's slider is dragged, and eases
+/// over to a jump made with a click or a key.
+struct BrightnessFollower {
+    private var lastSystemBrightness: Float
+    private var lastNativeUpdateTime: TimeInterval = 0
+    private var targetSystemBrightness: Float?
+
+    init(systemBrightness: Float) {
+        lastSystemBrightness = systemBrightness
+    }
+
+    /// Where a slider at `current` moves to now that the display is at `systemBrightness`, or nil if it stays.
+    mutating func follow(_ systemBrightness: Float, from current: Float) -> Float? {
+        var current = current
+        var newBrightness: Float?
+        let stepChange = abs(systemBrightness - lastSystemBrightness)
+        
+        // 1. Did the native brightness just move?
+        if stepChange > 0.001 {
+            let now = Date().timeIntervalSinceReferenceDate
+            let timeSinceLastUpdate = now - lastNativeUpdateTime
+            
+            lastNativeUpdateTime = now
+            lastSystemBrightness = systemBrightness
+            
+            // If updates are firing rapidly (< 50ms apart), the user is continuously dragging.
+            if timeSinceLastUpdate < 0.05 {
+                // Abort any ongoing animations and snap instantly to perfectly follow the drag!
+                targetSystemBrightness = nil
+                current = systemBrightness
+                newBrightness = systemBrightness
+            } else {
+                // The value changed after being idle. This is the first frame of a new interaction.
+                if stepChange > 0.04 {
+                    // Large jump -> A Click or Keyboard Tap. Start the ease-out animation!
+                    targetSystemBrightness = systemBrightness
+                } else {
+                    // Small jump -> The very beginning of a slow drag. Snap instantly.
+                    current = systemBrightness
+                    newBrightness = systemBrightness
+                }
+            }
+        } 
+        
+        // 2. Process the ease-out animation if we have a target
+        if let target = targetSystemBrightness {
+            let diff = target - current
+            
+            // Snap to the target once we are visually indistinguishable from it
+            if abs(diff) < 0.002 {
+                newBrightness = target
+                targetSystemBrightness = nil
+            } else {
+                var step = diff * 0.12
+                let minSpeed: Float = 0.002
+                
+                if abs(step) < minSpeed {
+                    step = diff > 0 ? minSpeed : -minSpeed
+                }
+                
+                // CRITICAL FIX: Prevent Overshoot
+                // This stops the minSpeed from making the slider vibrate/jitter at the very end
+                if abs(step) > abs(diff) {
+                    step = diff
+                }
+                
+                newBrightness = current + step
+            }
+            
+        } else if stepChange <= 0.001 {
+            // 3. Not animating, and no native movement this frame.
+            // Clean up any microscopic drift to ensure 100% sync.
+            let delta = abs(current - systemBrightness)
+            if delta > 0.002 {
+                newBrightness = systemBrightness
+            }
+        }
+        return newBrightness
     }
 }
 
@@ -1497,7 +1687,16 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
     var intensity: Float // kept while the filter is off, for when it's turned back on
     var tint: Float      // degrees
     var brightness: Float
+    /// Each display's own brightness, by its `Display.key`, for while the displays are adjusted
+    /// independently. Kept while they aren't, for when they are again.
+    var displayBrightness: [String: Float] = [:]
     var isDarkAppearance: Bool
+
+    /// A display's brightness, which is `brightness` until it's been given its own
+    subscript(brightnessOf display: String) -> Float {
+        get { displayBrightness[display] ?? brightness }
+        set { displayBrightness[display] = newValue }
+    }
 
     static let defaultSchedule: [ColorKeyframe] = [
         ColorKeyframe(minute: 5 * 60 + 45,  isColorFilterOn: true,  intensity: 0.35, tint: 0,   brightness: 0.82, isDarkAppearance: true),
@@ -1513,8 +1712,15 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
         var intensity: Float
         var tint: Float
         var brightness: Float
+        /// The brightness of each display either keyframe has one of its own for
+        var displayBrightness: [String: Float] = [:]
         /// The appearance of the keyframe at or before this time
         var isDarkAppearance: Bool
+
+        /// A display's brightness, or with no display, the brightness for all of them
+        func brightness(of display: String?) -> Float {
+            display.flatMap { displayBrightness[$0] } ?? brightness
+        }
 
         /// The system filter bottoms out at its "Low" intensity, so below that the schedule switches it off
         var isColorFilterOn: Bool { intensity >= ColorFilterManager.shared.intensityRange.lowerBound }
@@ -1523,9 +1729,9 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
             return min(max(intensity, intensityRange.lowerBound), intensityRange.upperBound)
         }
 
-        /// Roughly how white looks on screen with these settings, for the Schedule window's preview.
-        var previewColor: Color {
-            Color(hue: Double(tint) / 360, saturation: isColorFilterOn ? Double(filterIntensity) : 0, brightness: Double(brightness))
+        /// Roughly how white looks on a display with these settings, for the Schedule window's preview.
+        func previewColor(ofDisplay display: String? = nil) -> Color {
+            Color(hue: Double(tint) / 360, saturation: isColorFilterOn ? Double(filterIntensity) : 0, brightness: Double(brightness(of: display)))
         }
     }
 
@@ -1554,10 +1760,14 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
 
         let startIntensity = start.isColorFilterOn ? start.intensity : 0
         let endIntensity = end.isColorFilterOn ? end.intensity : 0
+        let displays = Set(start.displayBrightness.keys).union(end.displayBrightness.keys)
         return Settings(
             intensity: startIntensity + (endIntensity - startIntensity) * progress,
             tint: tint,
             brightness: start.brightness + (end.brightness - start.brightness) * progress,
+            displayBrightness: Dictionary(uniqueKeysWithValues: displays.map { display in
+                (display, start[brightnessOf: display] + (end[brightnessOf: display] - start[brightnessOf: display]) * progress)
+            }),
             isDarkAppearance: start.isDarkAppearance
         )
     }
@@ -1565,7 +1775,7 @@ struct ColorKeyframe: Identifiable, Codable, Equatable {
 
 extension ColorKeyframe {
     /// Keyframes saved before they had an appearance come back Dark where the color filter is on, as
-    /// in the default schedule.
+    /// in the default schedule, and ones saved before displays had a brightness each come back without.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -1574,17 +1784,41 @@ extension ColorKeyframe {
         intensity = try container.decode(Float.self, forKey: .intensity)
         tint = try container.decode(Float.self, forKey: .tint)
         brightness = try container.decode(Float.self, forKey: .brightness)
+        displayBrightness = try container.decodeIfPresent([String: Float].self, forKey: .displayBrightness) ?? [:]
         isDarkAppearance = try container.decodeIfPresent(Bool.self, forKey: .isDarkAppearance) ?? isColorFilterOn
     }
 }
 
 // MARK: - 5. System Manager (Gamma & Hardware Brightness)
+/// A display the Mac draws to. Mirrored displays are one of these, and take its brightness.
+struct Display: Identifiable, Hashable {
+    let id: CGDirectDisplayID
+    /// The display's UUID, which, unlike its ID, stays the same while it's unplugged and between launches
+    let key: String
+    /// Its name in System Settings › Displays
+    let name: String
+
+    /// The displays from left to right, as they're arranged in System Settings › Displays.
+    static func connected() -> [Display] {
+        NSScreen.screens
+            .sorted { ($0.frame.minX, -$0.frame.maxY) < ($1.frame.minX, -$1.frame.maxY) }
+            .compactMap { screen in
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                      let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue(),
+                      let key = CFUUIDCreateString(nil, uuid) as String? else { return nil }
+                return Display(id: number.uint32Value, key: key, name: screen.localizedName)
+            }
+    }
+}
+
 class GammaManager {
     static let shared = GammaManager()
-    
-    private var lastBrightness: Float = -1.0
-    private var isGloballyRestored: Bool = false
-    
+
+    /// The brightness each display was last set to, so one that hasn't changed isn't set again
+    private var lastBrightness: [CGDirectDisplayID: Float] = [:]
+    /// The displays dimmed in software, and how far
+    private var softwareBrightness: [CGDirectDisplayID: Float] = [:]
+
     private var setBrightnessFunc: (@convention(c) (CGDirectDisplayID, Float) -> Int32)?
     private var getBrightnessFunc: (@convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32)?
     private var canChangeBrightnessFunc: (@convention(c) (CGDirectDisplayID) -> Bool)?
@@ -1604,29 +1838,40 @@ class GammaManager {
         }
     }
     
-    func getNativeBrightness() -> Float? {
+    /// Whether the Mac sets this display's brightness itself, rather than it being dimmed in software
+    func canSetBrightness(of displayID: CGDirectDisplayID) -> Bool {
+        canChangeBrightnessFunc?(displayID) ?? false
+    }
+
+    func getNativeBrightness(of displayID: CGDirectDisplayID) -> Float? {
         guard let getFunc = getBrightnessFunc else { return nil }
         var brightness: Float = 1.0
-        let result = getFunc(CGMainDisplayID(), &brightness)
+        let result = getFunc(displayID, &brightness)
         return result == 0 ? brightness : nil
     }
-    
-    func setGamma(brightness: Float, skipHardwareUpdate: Bool = false) {
-        if abs(brightness - lastBrightness) < 0.001 {
-            return
-        }
-        
-        lastBrightness = brightness
-        
+
+    /// Sets each display to its brightness, a display that mirrors another to that one's, and leaves
+    /// out any display without one. `skippedHardware` is a display the system has set already, which is
+    /// only dimmed in software if it can't be set directly.
+    func setBrightness(_ displayBrightness: [CGDirectDisplayID: Float], skippingHardwareOf skippedHardware: CGDirectDisplayID? = nil) {
         let displays = getAllDisplays()
-        var needsGlobalRestore = true
-        
+        lastBrightness = lastBrightness.filter { displays.contains($0.key) }
+        var newSoftwareBrightness = softwareBrightness.filter { displays.contains($0.key) }
+
         for displayID in displays {
+            let mirrorSet = CGDisplayPrimaryDisplay(displayID)
+            guard let brightness = displayBrightness[displayID]
+                    ?? displayBrightness.first(where: { CGDisplayPrimaryDisplay($0.key) == mirrorSet })?.value else { continue }
+            if let lastBrightness = lastBrightness[displayID], abs(brightness - lastBrightness) < 0.001 {
+                continue
+            }
+
+            lastBrightness[displayID] = brightness
+
             var hardwareBrightnessSucceeded = false
-            let canChange = canChangeBrightnessFunc?(displayID) ?? false
-            
-            if canChange {
-                if !skipHardwareUpdate {
+
+            if canSetBrightness(of: displayID) {
+                if displayID != skippedHardware {
                     if let setBrightnessFunc = setBrightnessFunc {
                         let result = setBrightnessFunc(displayID, brightness)
                         if result == 0 { hardwareBrightnessSucceeded = true }
@@ -1635,30 +1880,28 @@ class GammaManager {
                     hardwareBrightnessSucceeded = true
                 }
             }
-            
+
             let softwareBrightness = hardwareBrightnessSucceeded ? 1.0 : max(brightness, 0.05)
-            
-            if softwareBrightness < 0.999 {
-                needsGlobalRestore = false
-                
-                let table = calculateGammaTable(brightness: softwareBrightness)
-                CGSetDisplayTransferByTable(displayID, UInt32(table.count), table, table, table)
-            }
+            newSoftwareBrightness[displayID] = softwareBrightness < 0.999 ? softwareBrightness : nil
         }
-        
+
+        // A display's own colors can only be put back along with every other display's, so the ones
+        // still dimmed are then dimmed again
+        let needsGlobalRestore = softwareBrightness.keys.contains { displays.contains($0) && newSoftwareBrightness[$0] == nil }
         if needsGlobalRestore {
-            if !isGloballyRestored {
-                CGDisplayRestoreColorSyncSettings()
-                isGloballyRestored = true
-            }
-        } else {
-            isGloballyRestored = false
+            CGDisplayRestoreColorSyncSettings()
         }
+        for (displayID, softwareBrightness) in newSoftwareBrightness where needsGlobalRestore || self.softwareBrightness[displayID] != softwareBrightness {
+            let table = calculateGammaTable(brightness: softwareBrightness)
+            CGSetDisplayTransferByTable(displayID, UInt32(table.count), table, table, table)
+        }
+        softwareBrightness = newSoftwareBrightness
     }
-    
+
     func reset() {
         CGDisplayRestoreColorSyncSettings()
-        lastBrightness = -1.0
+        lastBrightness = [:]
+        softwareBrightness = [:]
     }
     
     private func getAllDisplays() -> [CGDirectDisplayID] {
@@ -1871,6 +2114,9 @@ enum SystemStrings {
     static let low = lookup("display.colorFilter.intensity.low", in: accessibilitySettings, english: "Low")
     static let high = lookup("display.colorFilter.intensity.high", in: accessibilitySettings, english: "High")
     static let tint = lookup("display.colorFilter.tint", in: accessibilitySettings, english: "Tint")
+    
+    // System Settings › Accessibility › Hearing Devices' switch for setting each hearing aid by itself
+    static let adjustIndependently = lookup("mfi.hearingaids.adjust.independently.toggle.title", in: accessibilitySettings, english: "Adjust Independently")
     
     // System Settings › Displays (Schedule is Night Shift's)
     static let brightness = lookup("Brightness", in: displaysSettings, english: "Brightness")

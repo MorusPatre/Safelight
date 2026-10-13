@@ -15,7 +15,7 @@ It lives in the menu bar.
 ## What it does
 
 - **A red that goes all the way.** Safelight drives the Color Tint filter built into macOS (System Settings › Accessibility › Display › Color Filters), so the screen can go fully red, which Night Shift can't. The filter applies to everything on screen.
-- **Brightness for every display.** Displays that let the Mac set their brightness are set directly. The rest, like most external monitors, are dimmed in software.
+- **Brightness for every display.** Set them all as one, or turn on Adjust Independently to give each display its own brightness, in the schedule too. Displays that let the Mac set their brightness are set directly. The rest, like most external monitors, are dimmed in software.
 - **Light and Dark too.** Each time of day can switch the system between Light and Dark appearance.
 - **One schedule for all of it.** Add as many times of day as you like. Each sets the color filter, intensity, tint, brightness and appearance, and the filter and brightness fade smoothly between them. The strip along the top previews the whole day.
 - **Looks and speaks like macOS.** The controls are the ones System Settings uses, and every label comes from System Settings' own translations, so Safelight appears in your Mac's language.
