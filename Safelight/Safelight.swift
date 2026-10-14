@@ -63,11 +63,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(scheduleLayout)
         let controlColors = NSMenuItem(title: "Control Colours", action: nil, keyEquivalent: "")
         controlColors.submenu = NSMenu()
-        for (title, usesAccentColor) in [("Custom", false), ("Accent Colour", true)] {
-            let option = NSMenuItem(title: title, action: #selector(chooseControlColors(_:)), keyEquivalent: "")
+        for style in ControlColors.Style.allCases {
+            let option = NSMenuItem(title: style.title, action: #selector(chooseControlColors(_:)), keyEquivalent: "")
             option.target = self
-            option.representedObject = usesAccentColor
-            option.state = ControlColors.shared.usesAccentColor == usesAccentColor ? .on : .off
+            option.representedObject = style.rawValue
+            option.state = ControlColors.shared.style == style ? .on : .off
             controlColors.submenu?.addItem(option)
         }
         menu.addItem(controlColors)
@@ -106,7 +106,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func chooseControlColors(_ sender: NSMenuItem) {
-        ControlColors.shared.usesAccentColor = sender.representedObject as? Bool ?? false
+        ControlColors.shared.style = (sender.representedObject as? String).flatMap(ControlColors.Style.init) ?? .custom
     }
     #endif
 
@@ -173,7 +173,7 @@ struct MenuView: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
-                            .controlTint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
+                            .controlTint(hue: controller.tint)
                             .disabled(controller.isAutoMode)
                     }
                     .gridCellColumns(2)
@@ -187,7 +187,7 @@ struct MenuView: View {
                         .padding(.top, 4)
 
                     intensitySlider
-                        .controlTint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
+                        .controlTint(hue: controller.tint)
                         .disabled(controller.isAutoMode)
                 }
 
@@ -787,7 +787,7 @@ struct ScheduleEditor: View {
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
-                                .controlTint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
+                                .controlTint(hue: keyframe.tint)
                                 .padding(.leading, layout.gapBeforeColorFilters)
 
                             // Holding any of the sliders shows its keyframe on screen until it's let go
@@ -797,7 +797,7 @@ struct ScheduleEditor: View {
                                 controller.preview(isEditing ? keyframe.id : nil)
                             }
                             .labelsHidden()
-                            .controlTint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
+                            .controlTint(hue: keyframe.tint)
                             .disabled(!keyframe.isColorFilterOn)
                             .frame(width: layout.intensityWidth)
                             .padding(.leading, layout.gapBeforeIntensity)
@@ -1215,20 +1215,27 @@ extension View {
     /// apart from a light background. Debug builds can draw them in the accent colour instead, with no
     /// shadow, as macOS would: Control Colours in the status item's menu.
     func controlTint(_ color: Color, hasShadow: Bool = false) -> some View {
-        modifier(ControlTint(color: color, hasShadow: hasShadow))
+        modifier(ControlTint(color: color, hasShadow: hasShadow, showsFilterTint: false))
+    }
+
+    /// Draws a switch or slider in the colour filter's hue, `tint` degrees round the colour wheel, so it
+    /// shows the tint that's applied. Debug builds keep this colour when Control Colours is Mixed.
+    func controlTint(hue tint: Float) -> some View {
+        modifier(ControlTint(color: Color(hue: Double(tint) / 360, saturation: 1.0, brightness: 1.0), hasShadow: false, showsFilterTint: true))
     }
 }
 
 private struct ControlTint: ViewModifier {
     let color: Color
     let hasShadow: Bool
+    let showsFilterTint: Bool
     #if DEBUG
     @ObservedObject private var controlColors = ControlColors.shared
     #endif
 
     func body(content: Content) -> some View {
         #if DEBUG
-        if controlColors.usesAccentColor {
+        if usesAccentColor {
             content
         } else {
             tinted(content)
@@ -1237,6 +1244,16 @@ private struct ControlTint: ViewModifier {
         tinted(content)
         #endif
     }
+
+    #if DEBUG
+    private var usesAccentColor: Bool {
+        switch controlColors.style {
+        case .custom: false
+        case .mixed: !showsFilterTint
+        case .accentColor: true
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func tinted(_ content: Content) -> some View {
@@ -1252,18 +1269,35 @@ private struct ControlTint: ViewModifier {
 }
 
 #if DEBUG
-/// Whether the switches and sliders are drawn in the accent colour in Debug builds, kept between
-/// launches until Custom is chosen again. Release builds always draw them in their own colours.
+/// The colours the switches and sliders are drawn in in Debug builds, kept between launches until
+/// Custom is chosen again. Release builds always draw them in their own colours, as Custom does.
 final class ControlColors: ObservableObject {
-    static let shared = ControlColors()
-    private static let defaultsKey = "controlsUseAccentColor"
+    enum Style: String, CaseIterable {
+        /// Each in its own colour: the filter's hue, white for Brightness and a muted gold.
+        case custom
+        /// The filter's hue on the controls that show it, and the accent colour on the rest.
+        case mixed
+        /// Every one in the accent colour, as macOS draws them.
+        case accentColor
 
-    @Published var usesAccentColor = UserDefaults.standard.bool(forKey: ControlColors.defaultsKey) {
+        var title: String {
+            switch self {
+            case .custom: "Custom"
+            case .mixed: "Mixed"
+            case .accentColor: "Accent Colour"
+            }
+        }
+    }
+
+    static let shared = ControlColors()
+    private static let defaultsKey = "controlColors"
+
+    @Published var style = UserDefaults.standard.string(forKey: ControlColors.defaultsKey).flatMap(Style.init) ?? .custom {
         didSet {
-            if usesAccentColor {
-                UserDefaults.standard.set(true, forKey: Self.defaultsKey)
-            } else {
+            if style == .custom {
                 UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+            } else {
+                UserDefaults.standard.set(style.rawValue, forKey: Self.defaultsKey)
             }
         }
     }
