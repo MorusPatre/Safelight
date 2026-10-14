@@ -61,15 +61,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let scheduleLayout = NSMenuItem(title: "Schedule Layout…", action: #selector(showScheduleLayout(_:)), keyEquivalent: "")
         scheduleLayout.target = self
         menu.addItem(scheduleLayout)
-        let controlColors = NSMenuItem(title: "Control Colours", action: nil, keyEquivalent: "")
-        controlColors.submenu = NSMenu()
-        for style in ControlColors.Style.allCases {
-            let option = NSMenuItem(title: style.title, action: #selector(chooseControlColors(_:)), keyEquivalent: "")
-            option.target = self
-            option.representedObject = style.rawValue
-            option.state = ControlColors.shared.style == style ? .on : .off
-            controlColors.submenu?.addItem(option)
-        }
+        let controlColors = NSMenuItem(title: "Control Colours…", action: #selector(showControlColors(_:)), keyEquivalent: "")
+        controlColors.target = self
         menu.addItem(controlColors)
         #endif
         menu.addItem(.separator())
@@ -105,8 +98,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ScheduleLayoutWindow.shared.show()
     }
 
-    @objc private func chooseControlColors(_ sender: NSMenuItem) {
-        ControlColors.shared.style = (sender.representedObject as? String).flatMap(ControlColors.Style.init) ?? .custom
+    // The popover opens beside the panel too, after the menu has closed, so both windows' controls
+    // can be seen changing
+    @objc private func showControlColors(_ sender: NSMenuItem) {
+        ControlColorsWindow.shared.show()
+        DispatchQueue.main.async {
+            if !self.popover.isShown { self.togglePopover(nil) }
+        }
     }
     #endif
 
@@ -120,6 +118,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if popover.isShown {
                 popover.performClose(sender)
             } else {
+                #if DEBUG
+                // While the Control Colours panel is open, clicking in it leaves the popover open
+                popover.behavior = ControlColorsWindow.shared.isVisible ? .semitransient : .transient
+                #endif
                 popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -173,7 +175,7 @@ struct MenuView: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
-                            .controlTint(hue: controller.tint)
+                            .controlTint(hue: controller.tint, for: .colorFiltersSwitch)
                             .disabled(controller.isAutoMode)
                     }
                     .gridCellColumns(2)
@@ -187,7 +189,7 @@ struct MenuView: View {
                         .padding(.top, 4)
 
                     intensitySlider
-                        .controlTint(hue: controller.tint)
+                        .controlTint(hue: controller.tint, for: .intensitySlider)
                         .disabled(controller.isAutoMode)
                 }
 
@@ -246,7 +248,7 @@ struct MenuView: View {
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
-                                .controlTint(Color(hue: 42 / 360, saturation: 0.55, brightness: 0.8).opacity(0.2))  // a muted gold
+                                .controlTint(Color(hue: 42 / 360, saturation: 0.55, brightness: 0.8).opacity(0.2), for: .adjustIndependentlySwitch)  // a muted gold
                         }
                         .gridCellColumns(2)
                     }
@@ -334,7 +336,7 @@ struct MenuView: View {
                 controller.isUserDraggingSlider = isEditing
             }
         )
-        .controlTint(.white, hasShadow: true)
+        .controlTint(.white, hasShadow: true, for: .brightnessSliders)
         .disabled(controller.isAutoMode)
     }
 }
@@ -787,7 +789,7 @@ struct ScheduleEditor: View {
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
-                                .controlTint(hue: keyframe.tint)
+                                .controlTint(hue: keyframe.tint, for: .scheduleColorFiltersSwitches)
                                 .padding(.leading, layout.gapBeforeColorFilters)
 
                             // Holding any of the sliders shows its keyframe on screen until it's let go
@@ -797,7 +799,7 @@ struct ScheduleEditor: View {
                                 controller.preview(isEditing ? keyframe.id : nil)
                             }
                             .labelsHidden()
-                            .controlTint(hue: keyframe.tint)
+                            .controlTint(hue: keyframe.tint, for: .scheduleIntensitySliders)
                             .disabled(!keyframe.isColorFilterOn)
                             .frame(width: layout.intensityWidth)
                             .padding(.leading, layout.gapBeforeIntensity)
@@ -817,7 +819,7 @@ struct ScheduleEditor: View {
                                     controller.preview(isEditing ? keyframe.id : nil)
                                 }
                                 .labelsHidden()
-                                .controlTint(.white, hasShadow: true)
+                                .controlTint(.white, hasShadow: true, for: .scheduleBrightnessSliders)
                                 .frame(width: layout.brightnessWidth)
                                 .padding(.leading, layout.gapBeforeBrightness)
                             }
@@ -1210,32 +1212,46 @@ final class ScheduleLayoutWindow {
 #endif
 
 // MARK: - Control Colours
+/// A switch or slider drawn in a colour of its own, or in each of the Schedule window's rows. Debug
+/// builds can draw each in the accent colour instead, in the Control Colours panel.
+enum TintedControl: String, CaseIterable, Identifiable {
+    case colorFiltersSwitch
+    case intensitySlider
+    case brightnessSliders
+    case adjustIndependentlySwitch
+    case scheduleColorFiltersSwitches
+    case scheduleIntensitySliders
+    case scheduleBrightnessSliders
+
+    var id: String { rawValue }
+}
+
 extension View {
-    /// Draws a switch or slider in `color`, with a soft shadow if `hasShadow`, which sets a white slider
-    /// apart from a light background. Debug builds can draw them in the accent colour instead, with no
-    /// shadow, as macOS would: Control Colours in the status item's menu.
-    func controlTint(_ color: Color, hasShadow: Bool = false) -> some View {
-        modifier(ControlTint(color: color, hasShadow: hasShadow, showsFilterTint: false))
+    /// Draws `control` in `color`, with a soft shadow if `hasShadow`, which sets a white slider apart
+    /// from a light background, unless a Debug build is set to draw it in the accent colour, with no
+    /// shadow, as macOS would.
+    func controlTint(_ color: Color, hasShadow: Bool = false, for control: TintedControl) -> some View {
+        modifier(ControlTint(color: color, hasShadow: hasShadow, control: control))
     }
 
-    /// Draws a switch or slider in the colour filter's hue, `tint` degrees round the colour wheel, so it
-    /// shows the tint that's applied. Debug builds keep this colour when Control Colours is Mixed.
-    func controlTint(hue tint: Float) -> some View {
-        modifier(ControlTint(color: Color(hue: Double(tint) / 360, saturation: 1.0, brightness: 1.0), hasShadow: false, showsFilterTint: true))
+    /// Draws `control` in the colour filter's hue, `tint` degrees round the colour wheel, so it shows
+    /// the tint that's applied.
+    func controlTint(hue tint: Float, for control: TintedControl) -> some View {
+        controlTint(Color(hue: Double(tint) / 360, saturation: 1.0, brightness: 1.0), for: control)
     }
 }
 
 private struct ControlTint: ViewModifier {
     let color: Color
     let hasShadow: Bool
-    let showsFilterTint: Bool
+    let control: TintedControl
     #if DEBUG
     @ObservedObject private var controlColors = ControlColors.shared
     #endif
 
     func body(content: Content) -> some View {
         #if DEBUG
-        if usesAccentColor {
+        if controlColors.accentColored.contains(control) {
             content
         } else {
             tinted(content)
@@ -1244,16 +1260,6 @@ private struct ControlTint: ViewModifier {
         tinted(content)
         #endif
     }
-
-    #if DEBUG
-    private var usesAccentColor: Bool {
-        switch controlColors.style {
-        case .custom: false
-        case .mixed: !showsFilterTint
-        case .accentColor: true
-        }
-    }
-    #endif
 
     @ViewBuilder
     private func tinted(_ content: Content) -> some View {
@@ -1269,37 +1275,159 @@ private struct ControlTint: ViewModifier {
 }
 
 #if DEBUG
-/// The colours the switches and sliders are drawn in in Debug builds, kept between launches until
-/// Custom is chosen again. Release builds always draw them in their own colours, as Custom does.
-final class ControlColors: ObservableObject {
-    enum Style: String, CaseIterable {
-        /// Each in its own colour: the filter's hue, white for Brightness and a muted gold.
-        case custom
-        /// The filter's hue on the controls that show it, and the accent colour on the rest.
-        case mixed
-        /// Every one in the accent colour, as macOS draws them.
-        case accentColor
+extension TintedControl {
+    static let popover: [TintedControl] = [.colorFiltersSwitch, .intensitySlider, .brightnessSliders, .adjustIndependentlySwitch]
+    static let schedule: [TintedControl] = [.scheduleColorFiltersSwitches, .scheduleIntensitySliders, .scheduleBrightnessSliders]
 
-        var title: String {
-            switch self {
-            case .custom: "Custom"
-            case .mixed: "Mixed"
-            case .accentColor: "Accent Colour"
-            }
+    var name: String {
+        switch self {
+        case .colorFiltersSwitch, .scheduleColorFiltersSwitches: SystemStrings.colorFilters
+        case .intensitySlider, .scheduleIntensitySliders: SystemStrings.intensity
+        case .brightnessSliders, .scheduleBrightnessSliders: SystemStrings.brightness
+        case .adjustIndependentlySwitch: SystemStrings.adjustIndependently
         }
     }
 
+    /// What Custom draws it in.
+    var customColor: String {
+        switch self {
+        case .colorFiltersSwitch, .intensitySlider, .scheduleColorFiltersSwitches, .scheduleIntensitySliders: "the filter's hue"
+        case .brightnessSliders, .scheduleBrightnessSliders: "white, with a soft shadow"
+        case .adjustIndependentlySwitch: "a muted gold"
+        }
+    }
+}
+
+/// The switches and sliders Debug builds draw in the accent colour, kept between launches until
+/// they're all Custom again. Release builds draw every one in its own colour.
+final class ControlColors: ObservableObject {
     static let shared = ControlColors()
     private static let defaultsKey = "controlColors"
 
-    @Published var style = UserDefaults.standard.string(forKey: ControlColors.defaultsKey).flatMap(Style.init) ?? .custom {
-        didSet {
-            if style == .custom {
-                UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
-            } else {
-                UserDefaults.standard.set(style.rawValue, forKey: Self.defaultsKey)
+    /// Choices the panel can make for every control at once.
+    static let presets: [(name: String, accentColored: Set<TintedControl>)] = [
+        ("Custom", []),
+        // The filter's hue only on the controls that show the tint
+        ("Mixed", [.brightnessSliders, .adjustIndependentlySwitch, .scheduleBrightnessSliders]),
+        ("Accent Colour", Set(TintedControl.allCases)),
+    ]
+
+    @Published var accentColored: Set<TintedControl> {
+        didSet { save() }
+    }
+
+    private init() {
+        let saved = UserDefaults.standard.stringArray(forKey: Self.defaultsKey) ?? []
+        accentColored = Set(saved.compactMap(TintedControl.init))
+    }
+
+    // Saved by name, so `defaults read Mo.Safelight controlColors` shows them
+    private func save() {
+        guard !accentColored.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+            return
+        }
+        let names = TintedControl.allCases.filter(accentColored.contains).map(\.rawValue)
+        UserDefaults.standard.set(names, forKey: Self.defaultsKey)
+    }
+}
+
+/// Custom or Accent Colour for each switch and slider that has a colour of its own, which it takes on
+/// as it's chosen, and presets that choose for every one at once.
+struct ControlColorsPanel: View {
+    @ObservedObject var controlColors = ControlColors.shared
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Preset", selection: preset) {
+                    ForEach(ControlColors.presets, id: \.name) { preset in
+                        Text(preset.name).tag(Optional(preset.name))
+                    }
+                    // Only there to name choices that aren't a preset's
+                    if presetName == nil {
+                        Text("Individual").tag(String?.none)
+                    }
+                }
+            }
+
+            Section("Popover") {
+                ForEach(TintedControl.popover, content: row)
+            }
+
+            Section("Schedule window") {
+                ForEach(TintedControl.schedule, content: row)
             }
         }
+        .formStyle(.grouped)
+        .frame(width: 470)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func row(_ control: TintedControl) -> some View {
+        Picker(control.name, selection: usesAccentColor(control)) {
+            Text("Custom").tag(false)
+            Text("Accent Colour").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .help("Custom: \(control.customColor)")
+    }
+
+    private func usesAccentColor(_ control: TintedControl) -> Binding<Bool> {
+        Binding(
+            get: { controlColors.accentColored.contains(control) },
+            set: { usesAccentColor in
+                if usesAccentColor {
+                    controlColors.accentColored.insert(control)
+                } else {
+                    controlColors.accentColored.remove(control)
+                }
+            }
+        )
+    }
+
+    /// The preset the choices are, if they're one of them.
+    private var presetName: String? {
+        ControlColors.presets.first { $0.accentColored == controlColors.accentColored }?.name
+    }
+
+    /// Choosing a preset makes every choice its own.
+    private var preset: Binding<String?> {
+        Binding(
+            get: { presetName },
+            set: { name in
+                if let preset = ControlColors.presets.first(where: { $0.name == name }) {
+                    controlColors.accentColored = preset.accentColored
+                }
+            }
+        )
+    }
+}
+
+/// The floating panel with `ControlColorsPanel`, from Control Colours… in the status item's menu, over
+/// the Schedule window, which has controls of its own to show.
+final class ControlColorsWindow {
+    static let shared = ControlColorsWindow()
+    private var panel: NSPanel?
+
+    var isVisible: Bool { panel?.isVisible == true }
+
+    func show() {
+        ScheduleWindow.shared.show()
+        if panel == nil {
+            let hostingController = NSHostingController(rootView: ControlColorsPanel())
+            hostingController.sizingOptions = [.minSize, .maxSize]
+            let panel = NSPanel(contentRect: .zero, styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
+            panel.contentViewController = hostingController
+            panel.title = "Control Colours"
+            panel.isFloatingPanel = true
+            panel.isReleasedWhenClosed = false
+            panel.setContentSize(hostingController.sizeThatFits(in: panel.contentMaxSize))
+            panel.center()
+            panel.setFrameAutosaveName("ControlColors") // back where it was left, if it's been moved
+            self.panel = panel
+        }
+        panel?.makeKeyAndOrderFront(nil)
     }
 }
 #endif
