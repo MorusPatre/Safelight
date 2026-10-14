@@ -61,6 +61,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let scheduleLayout = NSMenuItem(title: "Schedule Layout…", action: #selector(showScheduleLayout(_:)), keyEquivalent: "")
         scheduleLayout.target = self
         menu.addItem(scheduleLayout)
+        let controlColors = NSMenuItem(title: "Control Colours", action: nil, keyEquivalent: "")
+        controlColors.submenu = NSMenu()
+        for (title, usesAccentColor) in [("Custom", false), ("Accent Colour", true)] {
+            let option = NSMenuItem(title: title, action: #selector(chooseControlColors(_:)), keyEquivalent: "")
+            option.target = self
+            option.representedObject = usesAccentColor
+            option.state = ControlColors.shared.usesAccentColor == usesAccentColor ? .on : .off
+            controlColors.submenu?.addItem(option)
+        }
+        menu.addItem(controlColors)
         #endif
         menu.addItem(.separator())
         let quit = NSMenuItem(title: SystemStrings.quitApp, action: #selector(quit(_:)), keyEquivalent: "q")
@@ -93,6 +103,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     #if DEBUG
     @objc private func showScheduleLayout(_ sender: NSMenuItem) {
         ScheduleLayoutWindow.shared.show()
+    }
+
+    @objc private func chooseControlColors(_ sender: NSMenuItem) {
+        ControlColors.shared.usesAccentColor = sender.representedObject as? Bool ?? false
     }
     #endif
 
@@ -159,7 +173,7 @@ struct MenuView: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
-                            .tint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
+                            .controlTint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
                             .disabled(controller.isAutoMode)
                     }
                     .gridCellColumns(2)
@@ -173,7 +187,7 @@ struct MenuView: View {
                         .padding(.top, 4)
 
                     intensitySlider
-                        .tint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
+                        .controlTint(Color(hue: Double(controller.tint) / 360, saturation: 1.0, brightness: 1.0))
                         .disabled(controller.isAutoMode)
                 }
 
@@ -232,7 +246,7 @@ struct MenuView: View {
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
-                                .tint(Color(hue: 42 / 360, saturation: 0.55, brightness: 0.8).opacity(0.2))  // a muted gold
+                                .controlTint(Color(hue: 42 / 360, saturation: 0.55, brightness: 0.8).opacity(0.2))  // a muted gold
                         }
                         .gridCellColumns(2)
                     }
@@ -320,9 +334,7 @@ struct MenuView: View {
                 controller.isUserDraggingSlider = isEditing
             }
         )
-        .tint(.white)
-        // A soft shadow sets the white slider apart from a light background
-        .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+        .controlTint(.white, hasShadow: true)
         .disabled(controller.isAutoMode)
     }
 }
@@ -775,7 +787,7 @@ struct ScheduleEditor: View {
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
-                                .tint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
+                                .controlTint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
                                 .padding(.leading, layout.gapBeforeColorFilters)
 
                             // Holding any of the sliders shows its keyframe on screen until it's let go
@@ -785,7 +797,7 @@ struct ScheduleEditor: View {
                                 controller.preview(isEditing ? keyframe.id : nil)
                             }
                             .labelsHidden()
-                            .tint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
+                            .controlTint(Color(hue: Double(keyframe.tint) / 360, saturation: 1.0, brightness: 1.0))
                             .disabled(!keyframe.isColorFilterOn)
                             .frame(width: layout.intensityWidth)
                             .padding(.leading, layout.gapBeforeIntensity)
@@ -805,8 +817,7 @@ struct ScheduleEditor: View {
                                     controller.preview(isEditing ? keyframe.id : nil)
                                 }
                                 .labelsHidden()
-                                .tint(.white)
-                                .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+                                .controlTint(.white, hasShadow: true)
                                 .frame(width: layout.brightnessWidth)
                                 .padding(.leading, layout.gapBeforeBrightness)
                             }
@@ -1194,6 +1205,67 @@ final class ScheduleLayoutWindow {
             self.panel = panel
         }
         panel?.makeKeyAndOrderFront(nil)
+    }
+}
+#endif
+
+// MARK: - Control Colours
+extension View {
+    /// Draws a switch or slider in `color`, with a soft shadow if `hasShadow`, which sets a white slider
+    /// apart from a light background. Debug builds can draw them in the accent colour instead, with no
+    /// shadow, as macOS would: Control Colours in the status item's menu.
+    func controlTint(_ color: Color, hasShadow: Bool = false) -> some View {
+        modifier(ControlTint(color: color, hasShadow: hasShadow))
+    }
+}
+
+private struct ControlTint: ViewModifier {
+    let color: Color
+    let hasShadow: Bool
+    #if DEBUG
+    @ObservedObject private var controlColors = ControlColors.shared
+    #endif
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        if controlColors.usesAccentColor {
+            content
+        } else {
+            tinted(content)
+        }
+        #else
+        tinted(content)
+        #endif
+    }
+
+    @ViewBuilder
+    private func tinted(_ content: Content) -> some View {
+        if hasShadow {
+            content
+                .tint(color)
+                .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+        } else {
+            content
+                .tint(color)
+        }
+    }
+}
+
+#if DEBUG
+/// Whether the switches and sliders are drawn in the accent colour in Debug builds, kept between
+/// launches until Custom is chosen again. Release builds always draw them in their own colours.
+final class ControlColors: ObservableObject {
+    static let shared = ControlColors()
+    private static let defaultsKey = "controlsUseAccentColor"
+
+    @Published var usesAccentColor = UserDefaults.standard.bool(forKey: ControlColors.defaultsKey) {
+        didSet {
+            if usesAccentColor {
+                UserDefaults.standard.set(true, forKey: Self.defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+            }
+        }
     }
 }
 #endif
