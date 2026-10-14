@@ -98,8 +98,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ScheduleLayoutWindow.shared.show()
     }
 
-    // The popover opens beside the panel too, after the menu has closed, so both windows' controls
-    // can be seen changing
+    // The popover opens beside the panel too, after the menu has closed, so its controls can be seen
+    // changing
     @objc private func showControlColors(_ sender: NSMenuItem) {
         ControlColorsWindow.shared.show()
         DispatchQueue.main.async {
@@ -1404,8 +1404,7 @@ struct ControlColorsPanel: View {
     }
 }
 
-/// The floating panel with `ControlColorsPanel`, from Control Colours… in the status item's menu, over
-/// the Schedule window, which has controls of its own to show.
+/// The floating panel with `ControlColorsPanel`, from Control Colours… in the status item's menu.
 final class ControlColorsWindow {
     static let shared = ControlColorsWindow()
     private var panel: NSPanel?
@@ -1413,7 +1412,6 @@ final class ControlColorsWindow {
     var isVisible: Bool { panel?.isVisible == true }
 
     func show() {
-        ScheduleWindow.shared.show()
         if panel == nil {
             let hostingController = NSHostingController(rootView: ControlColorsPanel())
             hostingController.sizingOptions = [.minSize, .maxSize]
@@ -1427,6 +1425,7 @@ final class ControlColorsWindow {
             panel.setFrameAutosaveName("ControlColors") // back where it was left, if it's been moved
             self.panel = panel
         }
+        NSApp.activate(ignoringOtherApps: true)
         panel?.makeKeyAndOrderFront(nil)
     }
 }
