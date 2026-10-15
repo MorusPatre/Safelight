@@ -1,0 +1,77 @@
+#!/bin/zsh
+# Draws the README's screenshots from the current code: the popover and the Schedule window, in Dark
+# and in Light. scripts/release.sh runs it too, so each release's screenshots match it.
+#
+#   scripts/screenshots.sh    writes docs/popover-dark.png, popover-light.png, schedule-dark.png and
+#                             schedule-light.png
+#
+# It builds a copy of Safelight.swift into "Safelight Screenshots.app" with scripts/screenshots/,
+# whose NoSystemChanges.swift stands in for the functions that change the color filter, brightness and
+# appearance, so the Mac is left as it was. The copy has settings of its own, so the Schedule shows the
+# default schedule rather than yours, and FixedTime.swift keeps it at 21:00. A screenshot that looks
+# the same as the one in docs/ leaves it be, so they only change when the app does. Its windows are on
+# screen for a few seconds, on a Retina display: leave them be until it's done.
+
+set -eu
+cd "${0:A:h}/.."
+
+BUILD_DIR="build/screenshots"
+NAME="Safelight Screenshots"
+APP="$BUILD_DIR/$NAME.app"
+OUT="$BUILD_DIR/out"
+SHOTS=(popover-dark popover-light schedule-dark schedule-light)
+
+rm -rf "$APP" "$OUT" "$BUILD_DIR/src"
+mkdir -p "$APP/Contents/MacOS" "$OUT" "$BUILD_DIR/src"
+
+# The screenshot app has an entry point of its own instead of Safelight's
+if [[ $(grep -c '^@main$' Safelight/Safelight.swift) != 1 ]]; then
+    echo "Couldn't find Safelight's @main line to leave out" >&2
+    exit 2
+fi
+sed '/^@main$/d' Safelight/Safelight.swift >"$BUILD_DIR/src/Safelight.swift"
+
+cp scripts/screenshots/Info.plist "$APP/Contents/Info.plist"
+if ! xcrun swiftc -swift-version 5 -Onone -o "$APP/Contents/MacOS/$NAME" \
+        "$BUILD_DIR/src/Safelight.swift" scripts/screenshots/*.swift >"$BUILD_DIR/build.log" 2>&1; then
+    echo "Screenshot app build failed (full log: $BUILD_DIR/build.log):" >&2
+    grep -E 'error:' "$BUILD_DIR/build.log" | sort -u | head -20 >&2
+    exit 2
+fi
+
+# Every way Safelight changes the Mac must lead to NoSystemChanges.swift, not to the system
+if nm -u "$APP/Contents/MacOS/$NAME" | grep -E '_dlopen$|_CGSetDisplay|_CGDisplayRestore|_CGConfigure|_SLS|_DisplayServices|_MADisplayFilter' >&2; then
+    echo "The screenshot app could still change the system's settings through the functions above" >&2
+    exit 2
+fi
+codesign --force --sign - "$APP" 2>/dev/null
+
+# Opened with `open`, as only an app macOS launches that way can be sure of becoming active, and only an
+# active app's controls are drawn in the accent colour. Once for each appearance, in American English,
+# as the README is, with 24-hour times.
+for appearance in dark light; do
+    LOG="$BUILD_DIR/screenshots-$appearance.log"
+    rm -f "$LOG"
+    open -W -n --stdout "$LOG" --stderr "$LOG" "$APP" --args -appearance $appearance \
+        -AppleLanguages '(en-US)' -AppleLocale en_GB -output "$PWD/$OUT"
+    for shot in popover-$appearance schedule-$appearance; do
+        if [[ ! -f "$OUT/$shot.png" ]]; then
+            echo "Screenshots failed (full log: $LOG):" >&2
+            cat "$LOG" >&2
+            exit 2
+        fi
+    done
+done
+changed=()
+for shot in $SHOTS; do
+    if [[ -f "docs/$shot.png" ]] && "$APP/Contents/MacOS/$NAME" -compare "docs/$shot.png" "$OUT/$shot.png"; then
+        continue
+    fi
+    cp "$OUT/$shot.png" docs/
+    changed+=("docs/$shot.png")
+done
+if (( ${#changed} )); then
+    echo "Screenshots changed: ${changed[*]}"
+else
+    echo "Screenshots unchanged."
+fi

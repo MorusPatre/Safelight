@@ -9,7 +9,10 @@ Safelight puts your Mac's color filter, brightness and Light/Dark appearance on 
 It lives in the menu bar.
 
 <p align="center">
-  <img src="docs/popover.png" width="346" alt="Safelight's menu bar controls: Schedule, Color filters, Intensity, Tint, Brightness and Appearance">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/popover-dark.png">
+    <img src="docs/popover-light.png" width="364" alt="Safelight's menu bar controls: Schedule, Color filters, Intensity, Tint, Brightness, Adjust Independently and Appearance">
+  </picture>
 </p>
 
 ## What it does
@@ -22,7 +25,10 @@ It lives in the menu bar.
 - **Looks and speaks like macOS.** The controls are the ones System Settings uses, and every label comes from System Settings' own translations, so Safelight appears in your Mac's language.
 
 <p align="center">
-  <img src="docs/schedule.png" width="800" alt="The Schedule window: a preview of the day above five times of day, each with its own color filter, intensity, tint, brightness and appearance">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/schedule-dark.png">
+    <img src="docs/schedule-light.png" width="800" alt="The Schedule window: a preview of the day above five times of day, each with its own color filter, intensity, tint, brightness and appearance">
+  </picture>
 </p>
 
 Click the menu bar icon for the controls, and the gear next to Schedule to edit the schedule. Right-click (or Control-click) the icon for Open at Login and Quit. Reset and Quit turn the schedule and color filter off and set brightness back to full.
@@ -39,7 +45,7 @@ You only need to do this once. If you'd rather read the code first, all of it is
 
 ## Build it yourself
 
-You need Xcode 16 or later.
+You need Xcode 26 or later.
 
 ```bash
 git clone https://github.com/MorusPatre/Safelight.git

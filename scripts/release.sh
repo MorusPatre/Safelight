@@ -1,8 +1,10 @@
 #!/bin/zsh
 # Builds Safelight (Release) for Apple silicon and Intel, signed ad hoc so no Apple Developer
-# account is needed, and puts it in a disk image for a GitHub release.
+# account is needed, and puts it in a disk image for a GitHub release. Then it draws the README's
+# screenshots again with scripts/screenshots.sh, so they show the version released.
 #
-#   scripts/release.sh        writes build/release/Safelight.app and Safelight-<version>.dmg
+#   scripts/release.sh        writes build/release/Safelight.app and Safelight-<version>.dmg, and any
+#                             screenshots in docs/ that have changed
 
 set -eu
 cd "${0:A:h}/.."
@@ -38,3 +40,5 @@ cp scripts/dmg/DS_Store "$STAGE/.DS_Store"
 hdiutil create -quiet -volname Safelight -srcfolder "$STAGE" -fs HFS+ -format UDZO "$DMG"
 rm -rf "$STAGE"
 echo "Safelight $VERSION ($(lipo -archs "$OUT/Safelight.app/Contents/MacOS/Safelight")): $DMG"
+
+scripts/screenshots.sh || echo "The screenshots weren't drawn again; the disk image is ready all the same." >&2
