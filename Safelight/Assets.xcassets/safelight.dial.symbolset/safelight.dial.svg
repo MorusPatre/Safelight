@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 3300 2200">
+ <g id="Notes">
+  <rect height="2200" id="artboard" style="fill:white;opacity:1" width="3300" x="0" y="0"/>
+  <text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1933)">Template v.3.0</text>
+  <text id="descriptive-name" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1969)">safelight.dial</text>
+ </g>
+ <g id="Guides">
+  <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696" y2="696"/>
+  <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126" y2="1126"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.541" y2="1055.541"/>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556" y2="1556"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.541" y2="1485.541"/>
+  <line id="left-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="518" x2="518" y1="600.785" y2="720.121"/>
+  <line id="right-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="607" x2="607" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1406" x2="1406" y1="600.785" y2="720.121"/>
+  <line id="right-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1498.75" x2="1498.75" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2886" x2="2886" y1="600.785" y2="720.121"/>
+  <line id="right-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2984" x2="2984" y1="600.785" y2="720.121"/>
+ </g>
+ <g id="Symbols">
+  <g id="Ultralight-S" transform="matrix(1 0 0 1 518 696)">
+   <path d="M67.463 -5.5826C60.8907 -0.492 52.8132 2.2703 44.5 2.2703C23.7893 2.2703 7 -14.519 7 -35.2297C7 -55.9404 23.7893 -72.7297 44.5 -72.7297C65.2107 -72.7297 82 -55.9404 82 -35.2297C82 -30.248 81.0074 -25.3162 79.0802 -20.7224C78.0833 -21.6171 76.9097 -22.2926 75.6354 -22.7052C81.8961 -38.2692 75.7022 -56.0656 61.1309 -64.3791C46.5596 -72.6926 28.0877 -68.9691 17.8751 -55.6597C7.6624 -42.3504 8.8467 -23.5442 20.6482 -11.6211C32.4498 0.302 51.2429 1.6789 64.6562 -8.3968C65.3845 -7.2727 66.3407 -6.3139 67.463 -5.5826Z"/>
+   <path d="M78.6578 -13.6004C78.6578 -10.3033 75.985 -7.6304 72.6878 -7.6304C69.3907 -7.6304 66.7178 -10.3033 66.7178 -13.6004C66.7178 -16.8975 69.3907 -19.5704 72.6878 -19.5704C75.985 -19.5704 78.6578 -16.8975 78.6578 -13.6004Z"/>
+  </g>
+  <g id="Regular-S" transform="matrix(1 0 0 1 1406 696)">
+   <path d="M65.5384 -0.8327C59.6789 2.4318 53.0825 4.1453 46.375 4.1453C24.6288 4.1453 7 -13.4835 7 -35.2297C7 -56.9759 24.6288 -74.6047 46.375 -74.6047C68.1212 -74.6047 85.75 -56.9759 85.75 -35.2297C85.75 -31.9903 85.3503 -28.7633 84.5598 -25.6219C81.5377 -29.116 77.1491 -31.1283 72.5294 -31.1382C74.3997 -43.094 67.9247 -54.796 56.8017 -59.5623C45.6787 -64.3286 32.7397 -60.9456 25.373 -51.3451C18.0063 -41.7446 18.0874 -28.3709 25.5702 -18.8605C33.0529 -9.3502 46.032 -6.1245 57.0963 -11.0255C58.3016 -6.5657 61.3811 -2.8475 65.5384 -0.8327Z"/>
+   <path d="M83.9464 -15.187C83.9464 -8.8626 78.8195 -3.7357 72.4952 -3.7357C66.1708 -3.7357 61.0439 -8.8626 61.0439 -15.187C61.0439 -21.5114 66.1708 -26.6383 72.4952 -26.6383C78.8195 -26.6383 83.9464 -21.5114 83.9464 -15.187Z"/>
+  </g>
+  <g id="Black-S" transform="matrix(1 0 0 1 2886 696)">
+   <path d="M66.1241 3.1209C60.7358 5.5268 54.901 6.7703 49 6.7703C25.804 6.7703 7 -12.0337 7 -35.2297C7 -58.4257 25.804 -77.2297 49 -77.2297C72.196 -77.2297 91 -58.4257 91 -35.2297C91 -33.0144 90.8247 -30.8026 90.4758 -28.6149C86.1054 -33.5663 79.6066 -36.0929 73.0394 -35.3939C72.9693 -45.6624 66.3846 -54.7526 56.6496 -58.0202C46.9146 -61.2877 36.179 -58.0111 29.9278 -49.8643C23.6766 -41.7176 23.2902 -30.4997 28.966 -21.9421C34.6418 -13.3846 45.1265 -9.377 55.0632 -11.9669C56.0878 -5.4425 60.2103 0.1809 66.1241 3.1209Z"/>
+   <path d="M90.1765 -15.1284C90.1765 -6.8552 83.4698 -0.1484 75.1965 -0.1484C66.9233 -0.1484 60.2165 -6.8552 60.2165 -15.1284C60.2165 -23.4016 66.9233 -30.1084 75.1965 -30.1084C83.4698 -30.1084 90.1765 -23.4016 90.1765 -15.1284Z"/>
+  </g>
+ </g>
+</svg>

@@ -25,7 +25,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: SystemStrings.display)
+            // The app icon's dial, as a symbol drawn by scripts/make-icon.py
+            let image = NSImage(named: "safelight.dial")
+            image?.accessibilityDescription = SystemStrings.display
+            button.image = image
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
