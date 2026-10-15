@@ -64,9 +64,9 @@ with open(os.path.join(out, "icon.json"), "w") as f:
 # template has Ultralight, Regular and Black, and SF Symbols blends them into the weights between, so
 # all three are drawn with the same pieces.
 SYMBOL = {  # weight: the ring's outer radius and width, how far the knob stands out of it, the gap round the knob
-    "Ultralight": (37.5, 3.94, 4, 3.6),
-    "Regular": (39.375, 39.375 * WIDTH / (R + WIDTH / 2), 5, 4.5),
-    "Black": (42, 17.96, 6, 5.4),
+    "Ultralight": (37.5, 3.94, 4, 6),
+    "Regular": (39.375, 39.375 * WIDTH / (R + WIDTH / 2), 5, 7.5),
+    "Black": (42, 17.96, 6, 9),
 }
 SIDE_MARGIN, BASELINE, CAP_MIDDLE = 7, 696, -35.2297  # as Apple's circle; the middle of the cap height
 
