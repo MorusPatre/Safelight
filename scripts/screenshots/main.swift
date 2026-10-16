@@ -97,7 +97,7 @@ final class Screenshots: NSObject, NSApplicationDelegate {
         // The evening on the default schedule, with the Schedule off so every control is drawn at its brightest
         let controller = ColorController.shared
         controller.tint = 0
-        controller.intensity = 0.78
+        controller.intensity = 0.90
         controller.isColorFilterOn = true
         controller.brightness = 0.68
         controller.chooseAppearance(isDark: isDark) // which only the Appearance picker shows
