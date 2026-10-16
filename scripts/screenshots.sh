@@ -1,6 +1,7 @@
 #!/bin/zsh
-# Draws the README's screenshots from the current code: the popover and the Schedule window, in Dark
-# and in Light. scripts/release.sh runs it too, so each release's screenshots match it.
+# Draws the README's screenshots from the current code: the popover, open under its icon in the menu
+# bar, and the Schedule window, in Dark and in Light. scripts/release.sh runs it too, so each release's
+# screenshots match it.
 #
 #   scripts/screenshots.sh    writes docs/popover-dark.png, popover-light.png, schedule-dark.png and
 #                             schedule-light.png
@@ -8,9 +9,10 @@
 # It builds a copy of Safelight.swift into "Safelight Screenshots.app" with scripts/screenshots/,
 # whose NoSystemChanges.swift stands in for the functions that change the color filter, brightness and
 # appearance, so the Mac is left as it was. The copy has settings of its own, so the Schedule shows the
-# default schedule rather than yours, and FixedTime.swift keeps it at 21:00. A screenshot that looks
-# the same as the one in docs/ leaves it be, so they only change when the app does. Its windows are on
-# screen for a few seconds, on a Retina display: leave them be until it's done.
+# default schedule rather than yours, and FixedTime.swift keeps it at 21:00. Beside its icon, the menu
+# bar has stand-ins for Wi-Fi, Spotlight, Control Center and the clock rather than your own items. A
+# screenshot that looks the same as the one in docs/ leaves it be, so they only change when the app
+# does. Its windows are on screen for a few seconds, on a Retina display: leave them be until it's done.
 
 set -eu
 cd "${0:A:h}/.."
@@ -22,7 +24,7 @@ OUT="$BUILD_DIR/out"
 SHOTS=(popover-dark popover-light schedule-dark schedule-light)
 
 rm -rf "$APP" "$OUT" "$BUILD_DIR/src"
-mkdir -p "$APP/Contents/MacOS" "$OUT" "$BUILD_DIR/src"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$OUT" "$BUILD_DIR/src"
 
 # The screenshot app has an entry point of its own instead of Safelight's
 if [[ $(grep -c '^@main$' Safelight/Safelight.swift) != 1 ]]; then
@@ -32,6 +34,12 @@ fi
 sed '/^@main$/d' Safelight/Safelight.swift >"$BUILD_DIR/src/Safelight.swift"
 
 cp scripts/screenshots/Info.plist "$APP/Contents/Info.plist"
+# The menu bar icon is a symbol in the asset catalog
+if ! xcrun actool Safelight/Assets.xcassets --compile "$APP/Contents/Resources" --platform macosx \
+        --minimum-deployment-target 15.5 --output-partial-info-plist "$BUILD_DIR/assets.plist" >"$BUILD_DIR/actool.log" 2>&1; then
+    echo "Couldn't compile the asset catalog (full log: $BUILD_DIR/actool.log)" >&2
+    exit 2
+fi
 if ! xcrun swiftc -swift-version 5 -Onone -o "$APP/Contents/MacOS/$NAME" \
         "$BUILD_DIR/src/Safelight.swift" scripts/screenshots/*.swift >"$BUILD_DIR/build.log" 2>&1; then
     echo "Screenshot app build failed (full log: $BUILD_DIR/build.log):" >&2

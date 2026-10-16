@@ -11,7 +11,7 @@ It lives in the menu bar.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/popover-dark.png">
-    <img src="docs/popover-light.png" width="364" alt="Safelight's menu bar controls: Schedule, Color filters, Intensity, Tint, Brightness, Adjust Independently and Appearance">
+    <img src="docs/popover-light.png" width="418" alt="Safelight's icon in the menu bar, beside Wi-Fi, Spotlight, Control Center and the clock, with its controls open below it: Schedule, Color filters, Intensity, Tint, Brightness, Adjust Independently and Appearance">
   </picture>
 </p>
 
