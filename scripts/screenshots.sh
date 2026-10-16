@@ -52,7 +52,14 @@ if nm -u "$APP/Contents/MacOS/$NAME" | grep -E '_dlopen$|_CGSetDisplay|_CGDispla
     echo "The screenshot app could still change the system's settings through the functions above" >&2
     exit 2
 fi
-codesign --force --sign - "$APP" 2>/dev/null
+# Signed with your Apple Development certificate if you have one, so Screen Recording access, once
+# granted, stays granted: macOS knows an app signed ad hoc only by a hash of its code, which every build
+# changes, so it would ask again each time.
+IDENTITY=$(security find-identity -v -p codesigning | awk '/"Apple Development: / { print $2; exit }')
+if [[ -z "$IDENTITY" ]] || ! codesign --force --sign "$IDENTITY" --timestamp=none "$APP" 2>/dev/null; then
+    codesign --force --sign - "$APP" 2>/dev/null
+    echo "Signed ad hoc, so macOS will ask for Screen Recording access again" >&2
+fi
 
 # Opened with `open`, as only an app macOS launches that way can be sure of becoming active, and only an
 # active app's controls are drawn in the accent colour. Once for each appearance, in American English,
