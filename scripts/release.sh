@@ -45,12 +45,14 @@ echo "Safelight $VERSION ($(lipo -archs "$OUT/Safelight.app/Contents/MacOS/Safel
 # The update feed, appcast.xml, goes on the GitHub release beside the disk image. Each copy of
 # Safelight reads the latest release's (SUFeedURL in Safelight/Info.plist) and installs the disk image
 # it points to, but only if Sparkle's sign_update signed it with the private key that goes with
-# SUPublicEDKey. generate_keys put that key in this Mac's login keychain; without it, a copy that's
-# already installed can't be updated again, so keep a backup (generate_keys -x <file> writes one).
+# SUPublicEDKey. The key is a file outside the repository (SPARKLE_KEY to use another), read from
+# there so signing doesn't stop to ask for the keychain's password. Without it, a copy that's already
+# installed can't be updated again, so keep a copy somewhere safe.
 SPARKLE="$BUILD_DIR/SourcePackages/artifacts/sparkle/Sparkle/bin"
+KEY="${SPARKLE_KEY:-$HOME/.config/safelight/sparkle-private-key}"
 APPCAST="$OUT/appcast.xml"
 rm -f "$APPCAST"
-if SIGNATURE=$("$SPARKLE/sign_update" "$DMG"); then
+if [[ -f "$KEY" ]] && SIGNATURE=$("$SPARKLE/sign_update" --ed-key-file "$KEY" "$DMG"); then
     INFO="$OUT/Safelight.app/Contents/Info.plist"
     BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$INFO")
     MINIMUM_SYSTEM=$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$INFO")
@@ -74,10 +76,10 @@ if SIGNATURE=$("$SPARKLE/sign_update" "$DMG"); then
 </rss>
 EOF
     # Signed as well (SURequireSignedFeed), so no one else can change what it says about the update
-    "$SPARKLE/sign_update" "$APPCAST" >/dev/null
+    "$SPARKLE/sign_update" --ed-key-file "$KEY" "$APPCAST" >/dev/null
     echo "Update feed for $VERSION: $APPCAST (attach it to the v$VERSION release with the disk image)"
 else
-    echo "No update feed: sign_update couldn't sign the disk image (is Sparkle's private key in this Mac's keychain?)" >&2
+    echo "No update feed: couldn't sign the disk image with Sparkle's private key ($KEY)" >&2
 fi
 
 scripts/screenshots.sh || echo "The screenshots weren't drawn again; the disk image is ready all the same." >&2
