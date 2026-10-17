@@ -6,13 +6,30 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		CD5A2C012F14000000275750 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = CD5A2C022F14000000275750 /* Sparkle */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		CD9BBC602F00563C00275750 /* Safelight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Safelight.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		CD5A2C042F14000000275750 /* Exceptions for "Safelight" folder in "Safelight" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CD9BBC5F2F00563C00275750 /* Safelight */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		CD9BBC622F00563C00275750 /* Safelight */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CD5A2C042F14000000275750 /* Exceptions for "Safelight" folder in "Safelight" target */,
+			);
 			path = Safelight;
 			sourceTree = "<group>";
 		};
@@ -23,6 +40,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CD5A2C012F14000000275750 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +83,7 @@
 			);
 			name = Safelight;
 			packageProductDependencies = (
+				CD5A2C022F14000000275750 /* Sparkle */,
 			);
 			productName = Safelight;
 			productReference = CD9BBC602F00563C00275750 /* Safelight.app */;
@@ -95,6 +114,9 @@
 			);
 			mainGroup = CD9BBC572F00563C00275750;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CD5A2C032F14000000275750 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CD9BBC612F00563C00275750 /* Products */;
 			projectDirPath = "";
@@ -259,13 +281,14 @@
 				CODE_SIGN_ENTITLEMENTS = Safelight/Safelight.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MARKETING_VERSION)";
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = MDYN3TAG7F;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Safelight/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025–2026 MorusPatre. Licensed under the GNU GPL v3.0.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -291,13 +314,14 @@
 				CODE_SIGN_ENTITLEMENTS = Safelight/Safelight.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MARKETING_VERSION)";
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = MDYN3TAG7F;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Safelight/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025–2026 MorusPatre. Licensed under the GNU GPL v3.0.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -335,6 +359,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		CD5A2C032F14000000275750 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CD5A2C022F14000000275750 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CD5A2C032F14000000275750 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = CD9BBC582F00563C00275750 /* Project object */;
 }

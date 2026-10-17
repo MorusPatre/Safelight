@@ -3,6 +3,9 @@ import Cocoa
 import ApplicationServices
 import Foundation // Required for dynamic library loading
 import ServiceManagement
+#if canImport(Sparkle) // Not in scripts/screenshots.sh's copy, which leaves updates out
+import Sparkle
+#endif
 
 // MARK: - 1. App Entry Point
 @main
@@ -20,6 +23,9 @@ struct SafelightApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var popover = NSPopover()
+    #if canImport(Sparkle)
+    private let updates = Updates()
+    #endif
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -60,6 +66,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Read each time, as it can also be changed in System Settings › General › Login Items.
         openAtLogin.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(openAtLogin)
+        #if canImport(Sparkle)
+        updates.menuItems.forEach(menu.addItem)
+        #endif
         #if DEBUG
         let scheduleLayout = NSMenuItem(title: "Schedule Layout…", action: #selector(showScheduleLayout(_:)), keyEquivalent: "")
         scheduleLayout.target = self
@@ -136,6 +145,67 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         GammaManager.shared.reset()
     }
 }
+
+// MARK: - Updates
+#if canImport(Sparkle)
+/// Keeps Safelight up to date with Sparkle, from the feed in Info.plist. With Automatic Updates on, as
+/// it is to begin with, it looks at the latest GitHub release once a day, downloads anything newer in
+/// the background, and installs it the next time Safelight quits, so an update never resets the screen
+/// while it's in use. It installs only a disk image signed with the key whose public half is in
+/// Info.plist (SUPublicEDKey); scripts/release.sh signs each one.
+final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
+    private var controller: SPUStandardUpdaterController!
+
+    override init() {
+        super.init()
+        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: self)
+    }
+
+    /// For the status item's menu: the Automatic Updates switch, and Check for Updates…, which looks
+    /// right away and shows what it finds.
+    var menuItems: [NSMenuItem] {
+        let automaticUpdates = NSMenuItem(title: SystemStrings.automaticUpdates, action: #selector(toggleAutomaticUpdates(_:)), keyEquivalent: "")
+        automaticUpdates.target = self
+        automaticUpdates.state = isAutomatic ? .on : .off
+        let checkForUpdates = NSMenuItem(title: SystemStrings.checkForUpdates, action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        checkForUpdates.target = controller
+        return [automaticUpdates, checkForUpdates]
+    }
+
+    /// Sparkle keeps checking and installing as two settings; the switch is on when both are. Sparkle's
+    /// own update window can turn installing off by itself.
+    private var isAutomatic: Bool {
+        controller.updater.automaticallyChecksForUpdates && controller.updater.automaticallyDownloadsUpdates
+    }
+
+    /// Off, Safelight looks for updates only when asked to. Sparkle only changes installing while
+    /// checking is on, so installing goes off first and on second.
+    @objc private func toggleAutomaticUpdates(_ sender: NSMenuItem) {
+        let updater = controller.updater
+        if isAutomatic {
+            updater.automaticallyDownloadsUpdates = false
+            updater.automaticallyChecksForUpdates = false
+        } else {
+            updater.automaticallyChecksForUpdates = true
+            updater.automaticallyDownloadsUpdates = true
+        }
+    }
+
+    #if DEBUG
+    /// A Debug build only looks when asked: an update it found by itself would replace the build being
+    /// worked on with the release when it quits, and scripts/run.sh would then launch that instead.
+    func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        if updateCheck == .updatesInBackground {
+            throw CocoaError(.userCancelled)
+        }
+    }
+    #endif
+
+    /// Safelight has no Dock icon, so Sparkle shows an update it found by itself behind the app in use
+    /// rather than taking the focus from it. Saying that's all right keeps Sparkle from warning about it.
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+}
+#endif
 
 // MARK: - 3. UI (Menu View)
 struct MenuView: View {
@@ -2541,6 +2611,7 @@ enum SystemStrings {
     private static let swiftUI = "/System/Library/Frameworks/SwiftUI.framework"
     private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
     private static let dock = "/System/Library/CoreServices/Dock.app"
+    private static let softwareUpdateSettings = "/System/Library/ExtensionKit/Extensions/SoftwareUpdateSettingsExtension.appex"
     
     // System Settings › Accessibility › Display › Color Filters
     static let colorFilters = lookup("display.colorFilter.enable", in: accessibilitySettings, english: "Color filters")
@@ -2578,6 +2649,10 @@ enum SystemStrings {
     // The status item's menu: the Dock's Options › Open at Login, and the app menu's Quit item
     static let openAtLogin = lookup("OPEN_AT_LOGIN", table: "DockMenus", in: dock, english: "Open at Login")
     static let quitApp = String(format: lookup("Quit %@", table: "MainMenu", in: swiftUI, english: "Quit %@"), appName)
+    // ...and System Settings › General › Software Update's Automatic Updates and Check for Updates,
+    // the second with an ellipsis, as it opens a window
+    static let automaticUpdates = lookup("Automatic Updates", in: softwareUpdateSettings, english: "Automatic Updates")
+    static let checkForUpdates = lookup("Check for Updates", in: softwareUpdateSettings, english: "Check for Updates") + "…"
     private static var appName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String

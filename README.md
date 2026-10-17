@@ -31,7 +31,7 @@ It lives in the menu bar.
   </picture>
 </p>
 
-Click the menu bar icon for the controls, and the gear next to Schedule to edit the schedule. Right-click (or Control-click) the icon for Open at Login and Quit. Reset and Quit turn the schedule and color filter off and set brightness back to full.
+Click the menu bar icon for the controls, and the gear next to Schedule to edit the schedule. Right-click (or Control-click) the icon for Open at Login, Automatic Updates, Check for Updates… and Quit. Reset and Quit turn the schedule and color filter off and set brightness back to full.
 
 ## Install
 
@@ -41,7 +41,11 @@ Safelight needs macOS 15.5 or later, on Apple silicon or Intel.
 2. Open Safelight. It isn't notarized by Apple, so macOS says it can't check it for malware. Click **Done**.
 3. Open **System Settings › Privacy & Security**, scroll down, and click **Open Anyway** next to the message about Safelight. Confirm with your password.
 
-You only need to do this once. If you'd rather read the code first, all of it is in [`Safelight/Safelight.swift`](Safelight/Safelight.swift), and you can build it yourself.
+You only need to do this once. If you'd rather read the code first, all of Safelight's own code is in [`Safelight/Safelight.swift`](Safelight/Safelight.swift), and you can build it yourself.
+
+### Updates
+
+Safelight keeps itself up to date. Once a day it looks for a new release here, downloads it, and installs it the next time it quits, or when you log out or restart, so the screen never changes while you're using it. An update opens without the warning above, and Safelight only installs one signed with its own key. If you'd rather decide yourself, turn off Automatic Updates in the icon's right-click menu and choose Check for Updates… when you like. The updating is done by [Sparkle](https://sparkle-project.org), the open-source updater many Mac apps use.
 
 ## Build it yourself
 
@@ -53,7 +57,7 @@ cd Safelight
 scripts/release.sh
 ```
 
-The app ends up in `build/release`. A copy you build yourself opens without the warning above. You can also open `Safelight.xcodeproj` in Xcode, choose your own team (or Sign to Run Locally) under Signing & Capabilities, and run it from there.
+Xcode fetches Sparkle the first time. The app ends up in `build/release`. A copy you build yourself opens without the warning above, and updates itself to each new release like a downloaded one; turn off Automatic Updates to keep your own build. You can also open `Safelight.xcodeproj` in Xcode, choose your own team (or Sign to Run Locally) under Signing & Capabilities, and run it from there.
 
 ## How it works
 
