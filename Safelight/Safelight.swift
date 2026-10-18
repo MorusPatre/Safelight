@@ -2312,9 +2312,10 @@ class GammaManager {
             lastBrightness[displayID] = brightness
 
             // A display that's sent its picture is dimmed under a dark layer, which the displays mirroring
-            // it show as well, so they're left as they are
+            // it show as well, so they're left as they are. Its slider's lowest leaves a quarter of the
+            // picture, rather than black.
             if isStreamed(mirrorSet) {
-                if displayID == mirrorSet { setDimmingWindow(of: displayID, to: max(brightness, 0.05)) }
+                if displayID == mirrorSet { setDimmingWindow(of: displayID, to: 0.25 + 0.75 * brightness) }
                 newSoftwareBrightness[displayID] = nil
                 continue
             }
