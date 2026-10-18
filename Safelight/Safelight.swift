@@ -1631,7 +1631,13 @@ class ColorController: ObservableObject {
         ) { [weak self] _ in
             self?.displaysDidChange()
         }
-        
+        // An iPad's name can arrive after its display, which until then has macOS's own name for it
+        NotificationCenter.default.addObserver(
+            forName: Sidecar.connectedDevicesChangedNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            if let self, Display.connected() != displays { displaysDidChange() }
+        }
+
         // Follow changes made in System Settings (or anywhere else) to the color filter
         syncWithSystemColorFilter()
         CFNotificationCenterAddObserver(
@@ -2198,8 +2204,40 @@ struct Display: Identifiable, Hashable {
                 guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
                       let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue(),
                       let key = CFUUIDCreateString(nil, uuid) as String? else { return nil }
-                return Display(id: number.uint32Value, key: key, name: screen.localizedName)
+                let sidecarName = isSidecar(number.uint32Value) ? Sidecar.deviceName : nil
+                return Display(id: number.uint32Value, key: key, name: sidecarName ?? screen.localizedName)
             }
+    }
+
+    /// Whether a display is an iPad used with Sidecar, which System Settings tells by its vendor and
+    /// model codes, "aapl" and "iPad"
+    static func isSidecar(_ displayID: CGDirectDisplayID) -> Bool {
+        CGDisplayVendorNumber(displayID) == 0x6161_706C && CGDisplayModelNumber(displayID) == 0x6950_6164
+    }
+}
+
+/// The iPad used with Sidecar, as the private SidecarCore framework knows it. System Settings names a
+/// Sidecar display after it ("iPad"), rather than "Sidecar Display (AirPlay)" as macOS otherwise does.
+enum Sidecar {
+    /// Posted when an iPad is connected with Sidecar, or disconnected
+    static let connectedDevicesChangedNotification = Notification.Name("SidecarDisplayManagerConnectedDevicesChangedNotification")
+
+    private static let manager: NSObject? = {
+        let sharedManager = NSSelectorFromString("sharedManager")
+        guard dlopen("/System/Library/PrivateFrameworks/SidecarCore.framework/SidecarCore", RTLD_LAZY) != nil,
+              let managerClass = NSClassFromString("SidecarDisplayManager") as? NSObject.Type,
+              managerClass.responds(to: sharedManager) else { return nil }
+        return managerClass.perform(sharedManager)?.takeUnretainedValue() as? NSObject
+    }()
+
+    /// The connected iPad's name, as it's called on the iPad. Like System Settings, this takes the first
+    /// iPad connected, as Sidecar connects one at a time.
+    static var deviceName: String? {
+        guard let manager, manager.responds(to: NSSelectorFromString("connectedDevices")),
+              let device = (manager.value(forKey: "connectedDevices") as? [NSObject])?.first,
+              device.responds(to: NSSelectorFromString("name")),
+              let name = device.value(forKey: "name") as? String, !name.isEmpty else { return nil }
+        return name
     }
 }
 
@@ -2210,12 +2248,21 @@ class GammaManager {
     private var lastBrightness: [CGDirectDisplayID: Float] = [:]
     /// The displays dimmed in software, and how far
     private var softwareBrightness: [CGDirectDisplayID: Float] = [:]
+    /// The dark layer over each display that's sent its picture, as dimming it in software can't reach it
+    private var dimmingWindows: [CGDirectDisplayID: DimmingWindow] = [:]
+    /// Whether each display is sent its picture, as it was when last asked
+    private var streamedDisplays: [CGDirectDisplayID: Bool] = [:]
 
     private var setBrightnessFunc: (@convention(c) (CGDirectDisplayID, Float) -> Int32)?
     private var getBrightnessFunc: (@convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32)?
     private var canChangeBrightnessFunc: (@convention(c) (CGDirectDisplayID) -> Bool)?
-    
+    private var displayInfoFunc: (@convention(c) (CGDirectDisplayID) -> Unmanaged<CFDictionary>?)?
+
     init() {
+        if let handle = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY),
+           let sym = dlsym(handle, "CoreDisplay_DisplayCreateInfoDictionary") {
+            self.displayInfoFunc = unsafeBitCast(sym, to: (@convention(c) (CGDirectDisplayID) -> Unmanaged<CFDictionary>?).self)
+        }
         let handle = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY)
         if let handle = handle {
             if let sym = dlsym(handle, "DisplayServicesSetBrightness") {
@@ -2249,6 +2296,10 @@ class GammaManager {
         let displays = getAllDisplays()
         lastBrightness = lastBrightness.filter { displays.contains($0.key) }
         var newSoftwareBrightness = softwareBrightness.filter { displays.contains($0.key) }
+        for (displayID, window) in dimmingWindows where !displays.contains(displayID) || !isStreamed(displayID) {
+            window.close()
+            dimmingWindows[displayID] = nil
+        }
 
         for displayID in displays {
             let mirrorSet = CGDisplayPrimaryDisplay(displayID)
@@ -2259,6 +2310,14 @@ class GammaManager {
             }
 
             lastBrightness[displayID] = brightness
+
+            // A display that's sent its picture is dimmed under a dark layer, which the displays mirroring
+            // it show as well, so they're left as they are
+            if isStreamed(mirrorSet) {
+                if displayID == mirrorSet { setDimmingWindow(of: displayID, to: max(brightness, 0.05)) }
+                newSoftwareBrightness[displayID] = nil
+                continue
+            }
 
             var hardwareBrightnessSucceeded = false
 
@@ -2292,10 +2351,37 @@ class GammaManager {
 
     func reset() {
         CGDisplayRestoreColorSyncSettings()
+        dimmingWindows.values.forEach { $0.close() }
+        dimmingWindows = [:]
+        streamedDisplays = [:]
         lastBrightness = [:]
         softwareBrightness = [:]
     }
-    
+
+    /// Whether a display is sent its picture, as Sidecar's iPad and AirPlay displays are. It's sent
+    /// before the display's colors are adjusted, so dimming it in software doesn't change it.
+    private func isStreamed(_ displayID: CGDirectDisplayID) -> Bool {
+        if let isStreamed = streamedDisplays[displayID] { return isStreamed }
+        let info = displayInfoFunc?(displayID)?.takeRetainedValue() as NSDictionary?
+        let isStreamed = info?["kCGDisplayIsVirtualDevice"] as? Bool ?? false
+        streamedDisplays[displayID] = isStreamed
+        return isStreamed
+    }
+
+    /// Lays a dark layer over a display that lets `brightness` of its picture through, or none at full brightness
+    private func setDimmingWindow(of displayID: CGDirectDisplayID, to brightness: Float) {
+        guard brightness < 0.999,
+              let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID }) else {
+            dimmingWindows.removeValue(forKey: displayID)?.close()
+            return
+        }
+        let window = dimmingWindows[displayID] ?? DimmingWindow()
+        window.setFrame(screen.frame, display: false)
+        window.alphaValue = CGFloat(1 - brightness)
+        window.orderFrontRegardless()
+        dimmingWindows[displayID] = window
+    }
+
     private func getAllDisplays() -> [CGDirectDisplayID] {
         var displayCount: UInt32 = 0
         var result = CGGetActiveDisplayList(0, nil, &displayCount)
@@ -2324,6 +2410,22 @@ class GammaManager {
         return (0..<tableSize).map { i in
             Float(i) / Float(tableSize - 1) * brightness
         }
+    }
+}
+
+/// A black layer over a whole display that clicks go through, which darkens its picture as dimming it in
+/// software does: over everything (the menu bar and full-screen apps too) and on every Space.
+final class DimmingWindow: NSWindow {
+    init() {
+        super.init(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+        backgroundColor = .black
+        isOpaque = false
+        hasShadow = false
+        ignoresMouseEvents = true
+        isReleasedWhenClosed = false
+        animationBehavior = .none
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
     }
 }
 
