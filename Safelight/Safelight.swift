@@ -2312,9 +2312,10 @@ class GammaManager {
             lastBrightness[displayID] = brightness
 
             // A display that's sent its picture is dimmed under a dark layer, which the displays mirroring
-            // it show as well, so they're left as they are
+            // it show as well, so they're left as they are. It keeps a tenth of the picture, as under a
+            // darker layer the iPad looks black.
             if isStreamed(mirrorSet) {
-                if displayID == mirrorSet { setDimmingWindow(of: displayID, to: max(brightness, 0.05)) }
+                if displayID == mirrorSet { setDimmingWindow(of: displayID, to: max(brightness, 0.1)) }
                 newSoftwareBrightness[displayID] = nil
                 continue
             }
