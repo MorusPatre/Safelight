@@ -104,12 +104,15 @@ final class Screenshots: NSObject, NSApplicationDelegate {
         drawOnceInMenuBar()
     }
 
-    /// Draws once the menu bar has made room for Safelight's icon, which it doesn't straight away, and
-    /// so has given each item its size
-    private func drawOnceInMenuBar() {
-        guard let button = appDelegate.statusItem?.button, let bar = button.window?.frame,
-              NSScreen.screens.contains(where: { $0.frame.maxY == bar.maxY && $0.frame.minX <= bar.minX && bar.maxX <= $0.frame.maxX }) else {
-            return after(0.1) { self.drawOnceInMenuBar() }
+    /// Draws once the menu bar has made room for the items, which it doesn't straight away, and so has
+    /// given each its size, and has stopped moving them into place: one caught on its way would be drawn
+    /// out of line
+    private func drawOnceInMenuBar(lastFrames: [CGRect] = []) {
+        let frames = (systemItems + [appDelegate.statusItem].compactMap { $0 }).compactMap { $0.button?.window?.frame }
+        guard frames.count == systemItems.count + 1, frames == lastFrames, let bar = frames.last,
+              let menuBar = NSScreen.screens.first(where: { $0.frame.maxY == bar.maxY && $0.frame.minX <= bar.minX && bar.maxX <= $0.frame.maxX })?.frame,
+              frames.allSatisfy({ $0.maxY == menuBar.maxY && menuBar.minX <= $0.minX && $0.maxX <= menuBar.maxX }) else {
+            return after(0.1) { self.drawOnceInMenuBar(lastFrames: frames) }
         }
         anchor = NSWindow(contentRect: NSRect(x: screen.frame.midX, y: screen.visibleFrame.maxY - bar.height, width: bar.width, height: bar.height),
                           styleMask: .borderless, backing: .buffered, defer: false)
@@ -248,9 +251,15 @@ final class Screenshots: NSObject, NSApplicationDelegate {
 
     /// A menu bar item as the menu bar shows it, in the app's appearance, and where on screen, `movedBy`
     /// so much. The menu bar draws it out of the app, where no picture of it can be taken, so its button
-    /// draws itself here.
+    /// draws itself here. Its window is moved there while it does, onto the Retina display, so it's drawn
+    /// the same whichever display's menu bar it's in: on one that isn't Retina, the button lines its icon
+    /// up with whole points, half a point from where it is on a Retina display.
     private static func menuBarImage(of item: NSStatusItem, movedBy offset: CGVector) -> MenuBarImage? {
-        guard let button = item.button, let bar = button.window?.frame else { return nil }
+        guard let button = item.button, let window = button.window else { return nil }
+        let bar = window.frame
+        window.setFrameOrigin(NSPoint(x: bar.minX + offset.dx, y: bar.minY + offset.dy))
+        defer { window.setFrameOrigin(bar.origin) }
+        guard window.backingScaleFactor >= 2 else { return nil }
         button.appearance = NSApp.appearance
         // Its button is the height of the old menu bar, which the menu bar centres in its own
         let frame = button.frame.offsetBy(dx: bar.minX + offset.dx, dy: bar.minY + offset.dy + (bar.height - NSStatusBar.system.thickness) / 2)
