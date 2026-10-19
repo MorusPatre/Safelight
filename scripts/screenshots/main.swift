@@ -1,5 +1,6 @@
 import Cocoa
 import SwiftUI
+import ScreenCaptureKit
 
 // Draws the README's screenshots from Safelight's own views: the popover and the Schedule window, in
 // the `-appearance` given (dark or light), each written to `-output` as a PNG. scripts/screenshots.sh
@@ -91,6 +92,7 @@ final class Screenshots: NSObject, NSApplicationDelegate {
         backdrop = NSWindow(contentRect: NSRect(x: screen.frame.midX - 300, y: screen.visibleFrame.maxY - 700, width: 600, height: 700),
                             styleMask: .borderless, backing: .buffered, defer: false)
         backdrop.backgroundColor = .windowBackgroundColor
+        backdrop.colorSpace = .displayP3
         backdrop.ignoresMouseEvents = true
         backdrop.orderFrontRegardless()
 
@@ -190,22 +192,28 @@ final class Screenshots: NSObject, NSApplicationDelegate {
     private func capture(_ name: String, overBackdrop: Bool = false, menuBar: [MenuBarImage] = [], tries: Int = 10,
                          show: @escaping () -> NSWindow?, then next: @escaping () -> Void) {
         let window = show()
+        // In Display P3 rather than the display's own colours, which change when macOS rewrites its
+        // profile, and leave out the colours it can't show, like the deepest blue of the Tint slider
+        window?.colorSpace = .displayP3
         NSApp.activate(ignoringOtherApps: true)
         after(1) {
-            let lastChange = self.lastActivationChange
-            if NSApp.isActive, ProcessInfo.processInfo.systemUptime - lastChange > 0.75, let window, window.isVisible {
-                self.snapshot(window, as: name, overBackdrop: overBackdrop, menuBar: menuBar)
-                if NSApp.isActive, self.lastActivationChange == lastChange { return next() }
+            Task { @MainActor in
+                let lastChange = self.lastActivationChange
+                if NSApp.isActive, ProcessInfo.processInfo.systemUptime - lastChange > 0.75, let window, window.isVisible {
+                    await self.snapshot(window, as: name, overBackdrop: overBackdrop, menuBar: menuBar)
+                    if NSApp.isActive, self.lastActivationChange == lastChange { return next() }
+                }
+                guard tries > 1 else { self.fail("Safelight Screenshots couldn't stay the active app to draw \(name); run it again without clicking elsewhere") }
+                self.capture(name, overBackdrop: overBackdrop, menuBar: menuBar, tries: tries - 1, show: show, then: next)
             }
-            guard tries > 1 else { self.fail("Safelight Screenshots couldn't stay the active app to draw \(name); run it again without clicking elsewhere") }
-            self.capture(name, overBackdrop: overBackdrop, menuBar: menuBar, tries: tries - 1, show: show, then: next)
         }
     }
 
     /// Writes a window as it is on screen, with its shadow, in Display P3. A picture of a window by
     /// itself has its see-through parts over black, so with `overBackdrop` they're over the windows
     /// behind it (the backdrop) instead. The `menuBar` items are drawn above it, without the menu bar.
-    private func snapshot(_ window: NSWindow, as name: String, overBackdrop: Bool, menuBar: [MenuBarImage]) {
+    @MainActor
+    private func snapshot(_ window: NSWindow, as name: String, overBackdrop: Bool, menuBar: [MenuBarImage]) async {
         // Taken with room for the shadow all round, and trimmed to it afterwards
         let margin: CGFloat = 100
         let frame = window.frame
@@ -215,6 +223,7 @@ final class Screenshots: NSObject, NSApplicationDelegate {
             fail("Couldn't take a picture of \(name)")
         }
         guard image.width == Int(rect.width) * 2 else { fail("\(name) wasn't drawn at twice its size; is it on a Retina display?") }
+        let (rowOffset, columnOffset) = (Int(rect.maxY - frame.maxY) * 2, Int(frame.minX - rect.minX) * 2)
 
         if overBackdrop {
             // The window's shape, in the colours it has over the backdrop
@@ -222,7 +231,6 @@ final class Screenshots: NSObject, NSApplicationDelegate {
                   let colors = Self.windowImage(window, in: frame, withWindowsBelow: true).flatMap(bitmap),
                   let colorBytes = colors.data?.assumingMemoryBound(to: UInt8.self),
                   shape.width == colors.width, shape.height == colors.height else { fail("Couldn't take a picture of \(name) over the backdrop") }
-            let (rowOffset, columnOffset) = (Int(rect.maxY - frame.maxY) * 2, Int(frame.minX - rect.minX) * 2)
             for row in 0..<shape.height {
                 for column in 0..<shape.width {
                     let alpha = UInt32(shapeBytes[row * shape.bytesPerRow + column * 4 + 3])
@@ -232,6 +240,27 @@ final class Screenshots: NSObject, NSApplicationDelegate {
                         let over = channel == 3 ? 255 : UInt32(colorBytes[color + channel])
                         bytes[pixel + channel] = UInt8((over * alpha + UInt32(bytes[pixel + channel]) * (255 - alpha)) / 255)
                     }
+                }
+            }
+        }
+
+        // A colour the display can't show, like the deepest blue of the Tint slider, is on screen as the
+        // nearest one it can, which changes with the display's colour profile. So the window's colours
+        // far from grey, which a display may not be able to show, are from a picture of it in Display P3
+        // instead; the rest, which any display can, as on screen, where its glass and edges are drawn
+        // a little differently.
+        guard let own = await Self.p3Image(of: window, over: overBackdrop ? [backdrop] : []).flatMap(bitmap),
+              let ownBytes = own.data?.assumingMemoryBound(to: UInt8.self),
+              own.width == Int(frame.width) * 2, own.height == Int(frame.height) * 2 else { fail("Couldn't take a picture of \(name) in Display P3") }
+        for row in 0..<own.height {
+            for column in 0..<own.width {
+                let color = row * own.bytesPerRow + column * 4
+                let pixel = (row + rowOffset) * pixels.bytesPerRow + (column + columnOffset) * 4
+                let channels = (0..<3).map { ownBytes[color + $0] }
+                // Opaque, with a channel at least a quarter of the way from another
+                guard ownBytes[color + 3] == 255, bytes[pixel + 3] == 255, channels.max()! - channels.min()! >= 64 else { continue }
+                for channel in 0..<3 {
+                    bytes[pixel + channel] = channels[channel]
                 }
             }
         }
@@ -294,8 +323,8 @@ final class Screenshots: NSObject, NSApplicationDelegate {
         return context.makeImage().map { ($0, frame) }
     }
 
-    /// `CGWindowListCreateImage`, which the SDK no longer offers to Swift. Unlike ScreenCaptureKit, it
-    /// needs no Screen Recording permission for the app's own windows. With no `rect`, it's the window
+    /// `CGWindowListCreateImage`, which the SDK no longer offers to Swift: the screen's own picture, in
+    /// the display's colours, with shadows and glass as on screen. With no `rect`, it's the window
     /// alone, without its shadow; with one, it's that part of the screen with the window and its
     /// shadow, and with `withWindowsBelow`, with the windows behind it as well.
     private static func windowImage(_ window: NSWindow, in rect: CGRect? = nil, withWindowsBelow: Bool = false) -> CGImage? {
@@ -311,6 +340,30 @@ final class Screenshots: NSObject, NSApplicationDelegate {
         let bounds = CGRect(x: rect.minX, y: NSScreen.screens[0].frame.maxY - rect.maxY, width: rect.width, height: rect.height)
         let windows = withWindowsBelow ? onScreenBelowWindow | includingWindow : includingWindow
         return createImage(bounds, windows, UInt32(window.windowNumber), bestResolution)?.takeRetainedValue()
+    }
+
+    /// A window as it is on screen, without its shadow, over the `windowsBelow` it and see-through
+    /// elsewhere, in Display P3 whatever the display's colour profile: ScreenCaptureKit draws it in that
+    /// space for the picture, with every colour the window has, where `CGWindowListCreateImage` has the
+    /// screen's own. It needs no Screen Recording permission for the app's own windows.
+    @MainActor
+    private static func p3Image(of window: NSWindow, over windowsBelow: [NSWindow] = []) async -> CGImage? {
+        guard let content = try? await SCShareableContent.currentProcess,
+              let screen = window.screen, let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let display = content.displays.first(where: { $0.displayID == number.uint32Value }) else { return nil }
+        let windows = ([window] + windowsBelow).compactMap { window in content.windows.first { $0.windowID == CGWindowID(window.windowNumber) } }
+        guard windows.count == windowsBelow.count + 1 else { return nil }
+        let filter = SCContentFilter(display: display, including: windows)
+        let configuration = SCStreamConfiguration()
+        configuration.colorSpaceName = CGColorSpace.displayP3
+        configuration.showsCursor = false
+        configuration.captureResolution = .best
+        // In the display's own coordinates, which go down from its top
+        configuration.sourceRect = CGRect(x: window.frame.minX - screen.frame.minX, y: screen.frame.maxY - window.frame.maxY,
+                                          width: window.frame.width, height: window.frame.height)
+        configuration.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
+        configuration.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
+        return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
     }
 
     private func after(_ seconds: Double, _ body: @escaping () -> Void) {
