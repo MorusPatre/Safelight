@@ -124,10 +124,17 @@ final class Screenshots: NSObject, NSApplicationDelegate {
         anchor.contentView?.addSubview(NSView(frame: NSRect(x: 0, y: (bar.height - thickness) / 2, width: bar.width, height: thickness)))
         anchor.orderFrontRegardless()
 
-        // The items as they'd be in that menu bar, with the highlight behind Safelight's icon that shows
-        // its popover is open
-        let items = (systemItems + [appDelegate.statusItem].compactMap { $0 }).compactMap {
-            Self.menuBarImage(of: $0, movedBy: CGVector(dx: anchor.frame.minX - bar.minX, dy: anchor.frame.minY - bar.minY))
+        // The items as they'd be in that menu bar, Safelight's icon in the anchor's place and the others
+        // side by side to its right, with the highlight behind Safelight's icon that shows its popover is
+        // open. Not as far apart as they are: macOS puts each item back where it last was among the
+        // others, so one that has come into the menu bar since, like Focus's, can be between them.
+        var left = anchor.frame.minX
+        let offsets = frames.reversed().map { frame in
+            defer { left += frame.width }
+            return CGVector(dx: left - frame.minX, dy: anchor.frame.minY - bar.minY)
+        }.reversed()
+        let items = zip(systemItems + [appDelegate.statusItem].compactMap { $0 }, offsets).compactMap {
+            Self.menuBarImage(of: $0, movedBy: $1)
         }
         guard items.count == systemItems.count + 1, let highlight = Self.menuBarHighlight(around: anchor.frame) else { fail("Couldn't draw the menu bar") }
         draw(menuBar: items.dropLast() + [highlight] + items.suffix(1))
