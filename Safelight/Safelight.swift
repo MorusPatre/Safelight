@@ -28,6 +28,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if canImport(Sparkle)
+        // First, as it may quit to open the installed copy instead
+        Updates.leaveTranslocation()
+        updates.start()
+        #endif
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
         if let button = statusItem?.button {
@@ -158,7 +164,49 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
 
     override init() {
         super.init()
-        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: self)
+        controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: self)
+    }
+
+    /// Starts checking, once Safelight knows it isn't about to reopen from elsewhere.
+    func start() {
+        controller.startUpdater()
+    }
+
+    /// macOS runs an app that isn't notarized from a hidden, read-only copy of itself (App
+    /// Translocation) for as long as it has the quarantine flag it was downloaded with, even once the
+    /// user has allowed it with Open Anyway and copied it into Applications. Sparkle can't replace that
+    /// copy, so Safelight would never update. So when it starts that way, it takes the flag off the
+    /// copy that's installed, as Sparkle does with each update it installs, and opens that one
+    /// instead. From a disk image, which is read-only, it carries on as it is.
+    static func leaveTranslocation() {
+        // In the Security framework, which AppKit has loaded already, but not in its public headers
+        typealias IsTranslocatedURL = @convention(c) (CFURL, UnsafeMutablePointer<Bool>, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> DarwinBoolean
+        typealias CreateOriginalPathForURL = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
+        let loaded = UnsafeMutableRawPointer(bitPattern: -2) // RTLD_DEFAULT
+        guard let isTranslocatedURL = dlsym(loaded, "SecTranslocateIsTranslocatedURL").map({ unsafeBitCast($0, to: IsTranslocatedURL.self) }),
+              let createOriginalPathForURL = dlsym(loaded, "SecTranslocateCreateOriginalPathForURL").map({ unsafeBitCast($0, to: CreateOriginalPathForURL.self) })
+        else { return }
+
+        let running = Bundle.main.bundleURL as CFURL
+        var isTranslocated = false
+        guard isTranslocatedURL(running, &isTranslocated, nil).boolValue, isTranslocated,
+              let installed = createOriginalPathForURL(running, nil)?.takeRetainedValue() as URL?,
+              removexattr(installed.path, "com.apple.quarantine", XATTR_NOFOLLOW) == 0
+        else { return }
+        if let files = FileManager.default.enumerator(at: installed, includingPropertiesForKeys: nil) {
+            for case let file as URL in files {
+                removexattr(file.path, "com.apple.quarantine", XATTR_NOFOLLOW)
+            }
+        }
+
+        // Opened once this copy has quit, so the two never run at once
+        let reopen = Process()
+        reopen.executableURL = URL(fileURLWithPath: "/bin/sh")
+        reopen.arguments = ["-c", "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.1; done; /usr/bin/open \"$2\"",
+                            "sh", String(getpid()), installed.path]
+        if (try? reopen.run()) != nil {
+            exit(0)
+        }
     }
 
     /// For the status item's menu: the Automatic Updates switch, and Check for Updates…, which looks
