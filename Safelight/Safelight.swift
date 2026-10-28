@@ -96,7 +96,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleLayout.target = self
         let controlColors = NSMenuItem(title: "Control Colours…", action: #selector(showControlColors(_:)), keyEquivalent: "")
         controlColors.target = self
-        items += [scheduleLayout, controlColors]
+        items += [.separator(), scheduleLayout, controlColors]
         #endif
         let quit = NSMenuItem(title: SystemStrings.quitApp, action: #selector(quit(_:)), keyEquivalent: "q")
         quit.target = self
