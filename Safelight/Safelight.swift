@@ -32,6 +32,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // First, as it may quit to open the installed copy instead
         Updates.leaveTranslocation()
         updates.start()
+        // Closed first like Customize…, so Sparkle's window isn't left behind it
+        updates.willCheckForUpdates = { [weak self] in self?.popover.performClose(nil) }
         #endif
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -50,6 +52,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = NSHostingController(rootView: MenuView(customizeSchedule: { [weak self] in
             self?.popover.performClose(nil)
             ScheduleWindow.shared.show()
+        }, options: { [weak self] in
+            self?.optionItems() ?? []
         }))
     }
     
@@ -67,31 +71,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.performClose(nil)
         
         let menu = NSMenu()
-        let openAtLogin = NSMenuItem(title: SystemStrings.openAtLogin, action: #selector(toggleOpenAtLogin(_:)), keyEquivalent: "")
-        openAtLogin.target = self
-        // Read each time, as it can also be changed in System Settings › General › Login Items.
-        openAtLogin.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(openAtLogin)
-        #if canImport(Sparkle)
-        updates.menuItems.forEach(menu.addItem)
-        #endif
-        #if DEBUG
-        let scheduleLayout = NSMenuItem(title: "Schedule Layout…", action: #selector(showScheduleLayout(_:)), keyEquivalent: "")
-        scheduleLayout.target = self
-        menu.addItem(scheduleLayout)
-        let controlColors = NSMenuItem(title: "Control Colours…", action: #selector(showControlColors(_:)), keyEquivalent: "")
-        controlColors.target = self
-        menu.addItem(controlColors)
-        #endif
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: SystemStrings.quitApp, action: #selector(quit(_:)), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
+        menu.items = optionItems()
         
         // Attached only while it's open, so a plain click still reaches the popover.
         statusItem?.menu = menu
         statusItem?.button?.performClick(nil)
         statusItem?.menu = nil
+    }
+    
+    /// The status item's menu, which the ⋯ button in the popover's corner opens too. Made each time
+    /// it opens, as Open at Login can also be changed in System Settings › General › Login Items.
+    func optionItems() -> [NSMenuItem] {
+        let about = NSMenuItem(title: SystemStrings.aboutApp, action: #selector(showAbout(_:)), keyEquivalent: "")
+        about.target = self
+        let openAtLogin = NSMenuItem(title: SystemStrings.openAtLogin, action: #selector(toggleOpenAtLogin(_:)), keyEquivalent: "")
+        openAtLogin.target = self
+        openAtLogin.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        var items = [about, .separator(), openAtLogin]
+        #if canImport(Sparkle)
+        items += updates.menuItems
+        #endif
+        #if DEBUG
+        let scheduleLayout = NSMenuItem(title: "Schedule Layout…", action: #selector(showScheduleLayout(_:)), keyEquivalent: "")
+        scheduleLayout.target = self
+        let controlColors = NSMenuItem(title: "Control Colours…", action: #selector(showControlColors(_:)), keyEquivalent: "")
+        controlColors.target = self
+        items += [scheduleLayout, controlColors]
+        #endif
+        let quit = NSMenuItem(title: SystemStrings.quitApp, action: #selector(quit(_:)), keyEquivalent: "q")
+        quit.target = self
+        return items + [.separator(), quit]
+    }
+    
+    /// AppKit's About panel, with the version and the copyright line from Info.plist
+    @objc private func showAbout(_ sender: NSMenuItem) {
+        // Closed first like Customize…, so the panel isn't left behind it
+        popover.performClose(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
     }
     
     @objc private func toggleOpenAtLogin(_ sender: NSMenuItem) {
@@ -159,8 +176,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 /// the background, and installs it the next time Safelight quits, so an update never resets the screen
 /// while it's in use. It installs only a disk image signed with the key whose public half is in
 /// Info.plist (SUPublicEDKey); scripts/release.sh signs each one.
-final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
+final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate, NSMenuItemValidation {
     private var controller: SPUStandardUpdaterController!
+    /// Called when Check for Updates… is chosen, before Sparkle's window opens
+    var willCheckForUpdates: () -> Void = {}
 
     override init() {
         super.init()
@@ -215,9 +234,19 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
         let automaticUpdates = NSMenuItem(title: SystemStrings.automaticUpdates, action: #selector(toggleAutomaticUpdates(_:)), keyEquivalent: "")
         automaticUpdates.target = self
         automaticUpdates.state = isAutomatic ? .on : .off
-        let checkForUpdates = NSMenuItem(title: SystemStrings.checkForUpdates, action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
-        checkForUpdates.target = controller
+        let checkForUpdates = NSMenuItem(title: SystemStrings.checkForUpdates, action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        checkForUpdates.target = self
         return [automaticUpdates, checkForUpdates]
+    }
+
+    @objc private func checkForUpdates(_ sender: NSMenuItem) {
+        willCheckForUpdates()
+        controller.checkForUpdates(sender)
+    }
+
+    /// Check for Updates… is dimmed while Sparkle is checking already, as it is when it targets Sparkle
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action != #selector(checkForUpdates(_:)) || controller.updater.canCheckForUpdates
     }
 
     /// Sparkle keeps checking and installing as two settings; the switch is on when both are. Sparkle's
@@ -259,6 +288,8 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
 struct MenuView: View {
     @ObservedObject var controller = ColorController.shared
     let customizeSchedule: () -> Void
+    /// The status item's menu, for the ⋯ button
+    let options: () -> [NSMenuItem]
     
     var body: some View {
         VStack(spacing: 20) {
@@ -405,12 +436,10 @@ struct MenuView: View {
 
                 Spacer()
 
-                Button(SystemStrings.quit) {
-                    controller.reset()
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.borderless)
-                .foregroundColor(.secondary)
+                // Quit is in here, with the rest of the status item's menu, so it can be found
+                // without a right-click
+                OptionsButton(items: options)
+                    .help(SystemStrings.options)
             }
         }
         .padding()
@@ -459,6 +488,63 @@ struct MenuView: View {
         )
         .controlTint(.white, hasShadow: true, for: .brightnessSliders)
         .disabled(controller.isAutoMode)
+    }
+}
+
+// MARK: - Options Button
+/// The ⋯ in the popover's corner: a pull-down, like Finder's Action button, that opens the status
+/// item's menu under itself. It opens as the mouse goes down, and an item can be chosen by dragging to
+/// it and letting go, as in any menu.
+struct OptionsButton: NSViewRepresentable {
+    let items: () -> [NSMenuItem]
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = Button(frame: .zero, pullsDown: true)
+        button.isBordered = false
+        (button.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+        button.imagePosition = .imageOnly
+        // The colour SwiftUI gives the gear button's icon
+        button.contentTintColor = .secondaryLabelColor
+        button.setAccessibilityLabel(SystemStrings.options)
+        button.menu?.delegate = context.coordinator
+        button.menu?.items = [Coordinator.titleItem()]
+        return button
+    }
+
+    // Only as big as the ⋯, so it lines up with the edge as Quit did. A pop-up button takes all the
+    // width it's offered, and asks for room round its image besides.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        nsView.image?.size ?? nsView.intrinsicContentSize
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.items = items
+    }
+
+    /// Without the 5 points a pop-up button keeps to the left of its bezel: borderless, it centres the
+    /// ⋯ in its whole frame, which put it that much short of the edge
+    final class Button: NSPopUpButton {
+        override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets() }
+    }
+
+    final class Coordinator: NSObject, NSMenuDelegate {
+        var items: () -> [NSMenuItem] = { [] }
+
+        /// A pull-down shows its first item on the button, not in the menu
+        static func titleItem() -> NSMenuItem {
+            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: SystemStrings.options)
+            return item
+        }
+
+        /// Made afresh each time it opens, as the status item's menu is
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            menu.items = [Self.titleItem()] + items()
+        }
     }
 }
 
@@ -2749,8 +2835,9 @@ class AppearanceManager {
 }
 
 // MARK: - 8. System Strings (System Settings' Translations)
-/// Every label in the app, read from the string tables System Settings (or Control Center, or
-/// AppKit) loads the same label from, so it comes out in the system language, worded exactly as there.
+/// Every label in the app, read from the string tables System Settings (or Control Center, the Dock,
+/// or an app's menus) loads the same label from, so it comes out in the system language, worded
+/// exactly as there.
 /// Each keeps its English text as a fallback in case a table ever moves or drops the key.
 enum SystemStrings {
     private static let accessibilitySettings = "/System/Library/ExtensionKit/Extensions/AccessibilitySettingsExtension.appex"
@@ -2758,7 +2845,6 @@ enum SystemStrings {
     private static let controlCenterSettings = "/System/Library/ExtensionKit/Extensions/ControlCenterSettings.appex"
     /// Where `AppearancePicker` finds its thumbnails as well.
     static let appearanceSettings = "/System/Library/ExtensionKit/Extensions/Appearance.appex"
-    private static let appKit = "/System/Library/Frameworks/AppKit.framework"
     private static let swiftUI = "/System/Library/Frameworks/SwiftUI.framework"
     private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
     private static let dock = "/System/Library/CoreServices/Dock.app"
@@ -2793,12 +2879,14 @@ enum SystemStrings {
     // The title of Control Center's Display module, which this popover stands in for
     static let display = lookup("Display", table: "Display", in: controlCenter, english: "Display")
     
-    // System Settings › Control Center's Reset button, and AppKit's Quit button
+    // System Settings › Control Center's Reset button
     static let reset = lookup("Reset", in: controlCenterSettings, english: "Reset")
-    static let quit = lookup("Quit", table: "Document", in: appKit, english: "Quit")
     
-    // The status item's menu: the Dock's Options › Open at Login, and the app menu's Quit item
+    // The status item's menu, under the name of the Dock's Options menu, which has Open at Login in it;
+    // and the app menu's About and Quit items
+    static let options = lookup("OPTIONS", table: "DockMenus", in: dock, english: "Options")
     static let openAtLogin = lookup("OPEN_AT_LOGIN", table: "DockMenus", in: dock, english: "Open at Login")
+    static let aboutApp = String(format: lookup("About %@", table: "MainMenu", in: swiftUI, english: "About %@"), appName)
     static let quitApp = String(format: lookup("Quit %@", table: "MainMenu", in: swiftUI, english: "Quit %@"), appName)
     // ...and System Settings › General › Software Update's Automatic Updates and Check for Updates,
     // the second with an ellipsis, as it opens a window
