@@ -946,8 +946,15 @@ final class ScheduleWindow: NSObject, NSWindowDelegate {
             window.center()
             self.window = window
         }
+        guard let window else { return }
+        let isOpen = window.isVisible || window.isMiniaturized
         NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFront(nil)
+        // Each opening starts with no time selected, where the window would select the first row's, or
+        // keep the one selected when it closed. Already open, it keeps the one being typed.
+        if !isOpen {
+            window.makeFirstResponder(nil)
+        }
     }
 
     // The window grows downwards as rows are added, and to the right as columns are, so one near the
