@@ -655,6 +655,8 @@ final class HueSlider: NSSlider {
 struct TimeField: NSViewRepresentable {
     var label: String
     @Binding var selection: Date
+    /// Whether the field takes the keyboard as soon as it's in a window, with its hours selected to type over
+    var isFocusedOnAppear = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -662,6 +664,7 @@ struct TimeField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> TimeFieldPicker {
         let picker = TimeFieldPicker()
+        picker.becomesFirstResponderInWindow = isFocusedOnAppear
         picker.datePickerStyle = .textFieldAndStepper
         picker.datePickerElements = .hourMinute
         // Only as wide as the time and its stepper, like DatePicker
@@ -697,9 +700,25 @@ struct TimeField: NSViewRepresentable {
 
 /// A date picker set up as any other, field and all, but with a `TimeFieldCell`.
 final class TimeFieldPicker: NSDatePicker {
+    var becomesFirstResponderInWindow = false
+
     override class var cellClass: AnyClass? {
         get { TimeFieldCell.self }
         set { super.cellClass = newValue }
+    }
+
+    // SwiftUI puts the picker in the window while it updates the view, so the picker takes the keyboard
+    // straight after, rather than make the field it takes it from end editing in the middle of the update
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard becomesFirstResponderInWindow, window != nil else { return }
+        becomesFirstResponderInWindow = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.makeFirstResponder(self)
+            self.needsDisplay = true // or its hours aren't shown selected until something else redraws it
+            self.scrollToVisible(self.bounds) // in case the rows scroll
+        }
     }
 }
 
@@ -966,6 +985,8 @@ struct ScheduleEditor: View {
     #else
     private let layout = ScheduleLayout.standard
     #endif
+    /// The keyframe the + button added last, whose time is ready to type as soon as its row is in
+    @State private var addedKeyframeID: ColorKeyframe.ID?
 
     // Laid out like a grouped Form, whose sections are never wider than about 700 pt, so the window
     // can be as wide as the columns need
@@ -994,7 +1015,7 @@ struct ScheduleEditor: View {
 
                         // Add heads the column of the keyframes' Delete buttons
                         Button {
-                            controller.addKeyframe()
+                            addedKeyframeID = controller.addKeyframe()
                         } label: {
                             Image(systemName: "plus.circle.fill")
                         }
@@ -1013,7 +1034,7 @@ struct ScheduleEditor: View {
                             .gridCellUnsizedAxes(.horizontal)
 
                         GridRow {
-                            TimeField(label: SystemStrings.time, selection: time(of: keyframe.id))
+                            TimeField(label: SystemStrings.time, selection: time(of: keyframe.id), isFocusedOnAppear: keyframe.id == addedKeyframeID)
                                 .environment(\.timeZone, Self.utc)
 
                             Toggle(SystemStrings.colorFilters, isOn: $keyframe.isColorFilterOn)
@@ -1977,8 +1998,9 @@ class ColorController: ObservableObject {
         }
     }
 
-    /// Adds a keyframe at the next free half hour, set to what the schedule already has there.
-    func addKeyframe() {
+    /// Adds a keyframe at the next free half hour, set to what the schedule already has there, and returns its ID.
+    @discardableResult
+    func addKeyframe() -> ColorKeyframe.ID {
         let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
         let nextHalfHour = ((now.hour! * 60 + now.minute!) / 30 + 1) * 30
         let taken = Set(schedule.map(\.minute))
@@ -1986,7 +2008,7 @@ class ColorController: ObservableObject {
 
         let settings = ColorKeyframe.settings(in: schedule, at: Double(minute))
             ?? ColorKeyframe.Settings(intensity: isColorFilterOn ? intensity : 0, tint: tint, brightness: brightness, displayBrightness: displayBrightness, isDarkAppearance: isDarkAppearance)
-        schedule.append(ColorKeyframe(
+        let keyframe = ColorKeyframe(
             minute: minute,
             isColorFilterOn: settings.isColorFilterOn,
             intensity: settings.filterIntensity,
@@ -1994,7 +2016,9 @@ class ColorController: ObservableObject {
             brightness: settings.brightness,
             displayBrightness: settings.displayBrightness,
             isDarkAppearance: settings.isDarkAppearance
-        ))
+        )
+        schedule.append(keyframe)
+        return keyframe.id
     }
 
     /// The schedule always keeps at least one keyframe.
