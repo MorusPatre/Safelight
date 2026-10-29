@@ -103,12 +103,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return items + [.separator(), quit]
     }
     
-    /// AppKit's About panel, with the version and the copyright line from Info.plist
+    /// AppKit's About panel, with the version and the copyright line from Info.plist, and the credits
     @objc private func showAbout(_ sender: NSMenuItem) {
         // Closed first like Customize…, so the panel isn't left behind it
         popover.performClose(nil)
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(nil)
+        // The build number is the version, for Sparkle, so it isn't shown again as "1.0 (1.0)"
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: Self.credits, .version: ""])
+    }
+    
+    /// Links to the source code, its issues and GitHub Sponsors, as the README has, one to a line so
+    /// none breaks in two; then Sparkle's licence, which asks to come with every copy of it, from
+    /// Sparkle's LICENSE with its lines rejoined.
+    private static var credits: NSAttributedString {
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let credits = NSMutableAttributedString()
+        let links = [
+            (SystemStrings.sourceCode, "https://github.com/MorusPatre/Safelight"),
+            (SystemStrings.reportAnIssue, "https://github.com/MorusPatre/Safelight/issues"),
+            ("GitHub Sponsors", "https://github.com/sponsors/MorusPatre"),
+        ]
+        for (title, url) in links {
+            if credits.length > 0 {
+                credits.append(NSAttributedString(string: "\n", attributes: [.font: font]))
+            }
+            credits.append(NSAttributedString(string: title, attributes: [.font: font, .link: URL(string: url)!]))
+        }
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        credits.addAttribute(.paragraphStyle, value: centered, range: NSRange(location: 0, length: credits.length))
+    
+        #if canImport(Sparkle)
+        if let url = Bundle.main.url(forResource: "Sparkle License", withExtension: "txt"),
+           let licence = try? String(contentsOf: url, encoding: .utf8) {
+            let spaced = NSMutableParagraphStyle()
+            spaced.paragraphSpacingBefore = 8
+            credits.append(NSAttributedString(string: "\nSparkle\n", attributes: [
+                .font: NSFont.boldSystemFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: spaced,
+            ]))
+            credits.append(NSAttributedString(string: licence, attributes: [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize - 1),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
+        }
+        #endif
+        return credits
     }
     
     @objc private func toggleOpenAtLogin(_ sender: NSMenuItem) {
@@ -2849,6 +2890,8 @@ enum SystemStrings {
     private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
     private static let dock = "/System/Library/CoreServices/Dock.app"
     private static let softwareUpdateSettings = "/System/Library/ExtensionKit/Extensions/SoftwareUpdateSettingsExtension.appex"
+    private static let maps = "/System/Applications/Maps.app"
+    private static let linkPresentation = "/System/Library/Frameworks/LinkPresentation.framework"
     
     // System Settings › Accessibility › Display › Color Filters
     static let colorFilters = lookup("display.colorFilter.enable", in: accessibilitySettings, english: "Color filters")
@@ -2892,6 +2935,10 @@ enum SystemStrings {
     // the second with an ellipsis, as it opens a window
     static let automaticUpdates = lookup("Automatic Updates", in: softwareUpdateSettings, english: "Automatic Updates")
     static let checkForUpdates = lookup("Check for Updates", in: softwareUpdateSettings, english: "Check for Updates") + "…"
+    
+    // The About panel's links: what a link preview calls a source code file, and Maps' Report an Issue
+    static let sourceCode = lookup("Source Code (file type)", in: linkPresentation, english: "Source Code")
+    static let reportAnIssue = lookup("Report an Issue", in: maps, english: "Report an Issue")
     private static var appName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
