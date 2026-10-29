@@ -113,8 +113,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     /// Links to the source code, its issues and GitHub Sponsors, as the README has, one to a line so
-    /// none breaks in two; then Sparkle's licence, which asks to come with every copy of it, from
-    /// Sparkle's LICENSE with its lines rejoined.
+    /// none breaks in two. Sparkle's licence, which asks to come with every copy of it, comes in the
+    /// app's resources as Sparkle License.txt instead.
     private static var credits: NSAttributedString {
         let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let credits = NSMutableAttributedString()
@@ -132,23 +132,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let centered = NSMutableParagraphStyle()
         centered.alignment = .center
         credits.addAttribute(.paragraphStyle, value: centered, range: NSRange(location: 0, length: credits.length))
-    
-        #if canImport(Sparkle)
-        if let url = Bundle.main.url(forResource: "Sparkle License", withExtension: "txt"),
-           let licence = try? String(contentsOf: url, encoding: .utf8) {
-            let spaced = NSMutableParagraphStyle()
-            spaced.paragraphSpacingBefore = 8
-            credits.append(NSAttributedString(string: "\nSparkle\n", attributes: [
-                .font: NSFont.boldSystemFont(ofSize: NSFont.smallSystemFontSize),
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: spaced,
-            ]))
-            credits.append(NSAttributedString(string: licence, attributes: [
-                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize - 1),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]))
-        }
-        #endif
         return credits
     }
     
