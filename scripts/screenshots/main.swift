@@ -103,15 +103,19 @@ final class Screenshots: NSObject, NSApplicationDelegate {
         controller.isColorFilterOn = true
         controller.brightness = 0.68
         controller.chooseAppearance(isDark: isDark) // which only the Appearance picker shows
+        // And macOS's own Light and Dark wallpaper, which only the Wallpaper picker shows: it's only
+        // read, as the desktop isn't changed unless a picture is chosen
+        WallpaperManager.shared.showPictures(of: URL(fileURLWithPath: "/System/Library/Desktop Pictures/Sonoma.heic"))
         drawOnceInMenuBar()
     }
 
     /// Draws once the menu bar has made room for the items, which it doesn't straight away, and so has
     /// given each its size, and has stopped moving them into place: one caught on its way would be drawn
-    /// out of line
+    /// out of line. And once the wallpaper's pictures have loaded.
     private func drawOnceInMenuBar(lastFrames: [CGRect] = []) {
         let frames = (systemItems + [appDelegate.statusItem].compactMap { $0 }).compactMap { $0.button?.window?.frame }
-        guard frames.count == systemItems.count + 1, frames == lastFrames, let bar = frames.last,
+        guard WallpaperManager.shared.thumbnails != nil,
+              frames.count == systemItems.count + 1, frames == lastFrames, let bar = frames.last,
               let menuBar = NSScreen.screens.first(where: { $0.frame.maxY == bar.maxY && $0.frame.minX <= bar.minX && bar.maxX <= $0.frame.maxX })?.frame,
               frames.allSatisfy({ $0.maxY == menuBar.maxY && menuBar.minX <= $0.minX && $0.maxX <= menuBar.maxX }) else {
             return after(0.1) { self.drawOnceInMenuBar(lastFrames: frames) }

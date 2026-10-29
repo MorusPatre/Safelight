@@ -3,6 +3,7 @@ import Cocoa
 import ApplicationServices
 import Foundation // Required for dynamic library loading
 import ServiceManagement
+import UniformTypeIdentifiers
 #if canImport(Sparkle) // Not in scripts/screenshots.sh's copy, which leaves updates out
 import Sparkle
 #endif
@@ -52,9 +53,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = NSHostingController(rootView: MenuView(customizeSchedule: { [weak self] in
             self?.popover.performClose(nil)
             ScheduleWindow.shared.show()
+        }, chooseWallpaper: { [weak self] isDark in
+            // Closed first like Customize…, so the open panel isn't left behind it
+            self?.popover.performClose(nil)
+            WallpaperManager.shared.choosePicture(isDark: isDark)
         }, options: { [weak self] in
             self?.optionItems() ?? []
         }))
+        // So the wallpaper's pictures are there the first time the popover opens
+        WallpaperManager.shared.refresh()
     }
     
     /// A click opens the popover; a right-click or Control-click opens the menu instead.
@@ -181,6 +188,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // While the Control Colours panel is open, clicking in it leaves the popover open
                 popover.behavior = ControlColorsWindow.shared.isVisible ? .semitransient : .transient
                 #endif
+                // The wallpaper may have been changed in System Settings since
+                WallpaperManager.shared.refresh()
                 popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -312,6 +321,8 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
 struct MenuView: View {
     @ObservedObject var controller = ColorController.shared
     let customizeSchedule: () -> Void
+    /// Asks for the wallpaper's picture for Dark, or for Light
+    let chooseWallpaper: (_ isDark: Bool) -> Void
     /// The status item's menu, for the ⋯ button
     let options: () -> [NSMenuItem]
     
@@ -446,6 +457,22 @@ struct MenuView: View {
                     ))
                     .disabled(controller.isAutoMode || controller.isChangingAppearance)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                // --- WALLPAPER SECTION ---
+                // This sets System Settings › Wallpaper to a picture for Light and one for Dark, each
+                // under the Appearance picker's thumbnail of the same name. macOS fades the desktop over
+                // between them as the appearance changes, whatever changes it.
+                GridRow(alignment: .top) {
+                    Text(SystemStrings.wallpaper)
+                        .fontWeight(.medium)
+                        .frame(minWidth: 75, alignment: .leading)
+
+                    WallpaperPicker(choosePicture: chooseWallpaper)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
 
@@ -780,8 +807,9 @@ struct AppearancePicker: View {
     @Binding var isDark: Bool
 
     private static let artwork = Bundle(path: SystemStrings.appearanceSettings)
-    private static let thumbnailSize = CGSize(width: 67, height: 44)
-    private static let thumbnailCornerRadius: CGFloat = 5
+    /// The Wallpaper picker's thumbnails are this size too, so they line up under these
+    static let thumbnailSize = CGSize(width: 67, height: 44)
+    static let thumbnailCornerRadius: CGFloat = 5
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -1038,6 +1066,61 @@ struct AppearanceSegments: NSViewRepresentable {
         private func outline(around imageRect: NSRect) -> NSBezierPath {
             NSBezierPath(roundedRect: imageRect.insetBy(dx: -border, dy: -border), xRadius: cornerRadius, yRadius: cornerRadius)
         }
+    }
+}
+
+// MARK: - Wallpaper Picker
+/// The wallpaper's picture for Light and its picture for Dark, side by side like the Appearance picker's
+/// thumbnails, and the same size, so each is under the thumbnail of the same name, with its corners and
+/// the shadow of one that isn't chosen. Clicking one asks for its picture, as System Settings ›
+/// Wallpaper's Add Photo… does. While the wallpaper is one Safelight didn't make, each is an empty frame
+/// with a + in it. Disabled, from when a picture is chosen until it's on the desktop, it dims.
+struct WallpaperPicker: View {
+    @ObservedObject var wallpaper = WallpaperManager.shared
+    let choosePicture: (_ isDark: Bool) -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            option(SystemStrings.light, picture: wallpaper.thumbnails?.light, isDark: false)
+            option(SystemStrings.dark, picture: wallpaper.thumbnails?.dark, isDark: true)
+        }
+        .disabled(wallpaper.isChanging)
+    }
+
+    private func option(_ name: String, picture: CGImage?, isDark: Bool) -> some View {
+        Button {
+            choosePicture(isDark)
+        } label: {
+            VStack(spacing: 1) {
+                Group {
+                    if let picture {
+                        // Filling it, as the picture fills the screen
+                        Image(decorative: picture, scale: 1)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        Rectangle()
+                            .fill(.quaternary)
+                            .overlay {
+                                Image(systemName: "plus")
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
+                }
+                .frame(width: AppearancePicker.thumbnailSize.width, height: AppearancePicker.thumbnailSize.height)
+                .clipShape(RoundedRectangle(cornerRadius: AppearancePicker.thumbnailCornerRadius))
+                .padding(3.5) // where the Appearance picker has its ring
+                .shadow(color: .black.opacity(picture == nil ? 0 : 0.33), radius: 2)
+
+                Text(name)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(SystemStrings.addPhoto)
     }
 }
 
@@ -3005,7 +3088,209 @@ class AppearanceManager {
     }
 }
 
-// MARK: - 8. System Strings (System Settings' Translations)
+// MARK: - 8. Wallpaper Manager (A Picture for Light and One for Dark)
+/// Gives the desktop a picture for Light and another for Dark, made the way macOS's own Light and Dark
+/// wallpapers are (Sonoma's, for one): both pictures in one HEIC file, with XMP metadata saying which is
+/// which. macOS then changes the desktop over to the other picture itself whenever the appearance
+/// changes, whatever changed it: Safelight, System Settings, Control Center or Auto. It fades from one
+/// picture to the other over about two seconds, starting as the rest of the screen fades. Safelight
+/// writes that file in its Application Support folder and puts it on every Space of every display, as
+/// choosing a picture in System Settings › Wallpaper does with Show on all Spaces on.
+final class WallpaperManager: ObservableObject {
+    static let shared = WallpaperManager()
+
+    /// The pictures the desktop has in Light and in Dark, scaled down for the popover, while its
+    /// wallpaper is one Safelight made. Nil while it's anything else, which Safelight can't always show:
+    /// for a colour, macOS says the wallpaper is its default picture.
+    @Published private(set) var thumbnails: Thumbnails?
+    /// True from when a picture is chosen until the wallpaper with it is on the desktop
+    @Published private(set) var isChanging = false
+
+    struct Thumbnails {
+        var light: CGImage
+        var dark: CGImage
+    }
+
+    /// The wallpaper `thumbnails` are of
+    private var shownWallpaper: URL?
+    private var openPanel: NSOpenPanel?
+
+    /// Where each wallpaper is made, in a folder of its own, so the file on the desktop is never
+    /// written over, and the one before can be taken away
+    private let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+        .appendingPathComponent(Bundle.main.bundleIdentifier ?? "Safelight", isDirectory: true)
+        .appendingPathComponent("Wallpapers", isDirectory: true)
+
+    /// The metadata in which macOS's wallpapers say which picture is for Light and which for Dark: a
+    /// property list of their indexes, binary and in base 64
+    private static let metadataNamespace = "http://ns.apple.com/namespace/1.0/" as CFString
+    private static let metadataPrefix = "apple_desktop" as CFString
+    private static let appearanceMetadataPath = "apple_desktop:apr" as CFString
+
+    /// AppKit's option for putting a picture on every Space a display has, as System Settings ›
+    /// Wallpaper does with Show on all Spaces on. It's exported, but not in the public headers; without
+    /// it, a picture only goes on the Space each display is showing.
+    private static let allSpacesOption = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "NSWorkspaceDesktopImageAllSpacesKey") // RTLD_DEFAULT
+        .map { NSWorkspace.DesktopImageOptionKey(rawValue: $0.load(as: NSString.self) as String) }
+
+    /// Looks at the desktop's wallpaper again, as it can be changed in System Settings › Wallpaper
+    func refresh() {
+        let wallpaper = NSScreen.screens.first.flatMap(NSWorkspace.shared.desktopImageURL(for:))
+        showPictures(of: wallpaper.flatMap { isMadeHere($0) ? $0 : nil })
+    }
+
+    /// Shows the pictures `wallpaper` has for Light and for Dark, or none. They're loaded in the
+    /// background, and the ones shown before stay until they are.
+    func showPictures(of wallpaper: URL?) {
+        guard wallpaper != shownWallpaper else { return }
+        shownWallpaper = wallpaper
+        guard let wallpaper else {
+            thumbnails = nil
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let thumbnails = Self.thumbnails(of: wallpaper)
+            DispatchQueue.main.async {
+                guard let self, self.shownWallpaper == wallpaper else { return }
+                self.thumbnails = thumbnails
+            }
+        }
+    }
+
+    /// Asks for the picture for one appearance with an open panel, as System Settings › Wallpaper's
+    /// Add Photo… does, and puts it on the desktop. Asked again while the panel is open, it brings the
+    /// panel to the front.
+    func choosePicture(isDark: Bool) {
+        NSApp.activate(ignoringOtherApps: true)
+        if let openPanel {
+            openPanel.makeKeyAndOrderFront(nil)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        openPanel = panel
+        panel.begin { [weak self] response in
+            self?.openPanel = nil
+            guard response == .OK, let file = panel.url else { return }
+            self?.setPicture(file, isDark: isDark)
+        }
+    }
+
+    /// Makes a wallpaper with `file`'s picture for one appearance (its only picture, or for a file
+    /// with a picture for each, like Sonoma's, its picture for that appearance), keeping the desktop's
+    /// picture for the other, and puts it on every display. Until the wallpaper is one Safelight made,
+    /// the other appearance takes `file`'s picture for it too.
+    func setPicture(_ file: URL, isDark: Bool) {
+        guard !isChanging, let folder else { return }
+        refresh()
+        let current = shownWallpaper
+        let wallpaper = folder.appendingPathComponent(UUID().uuidString, isDirectory: true).appendingPathComponent("Safelight.heic")
+        isChanging = true
+        // Away from the main thread, as writing two pictures the size of a screen takes a moment
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let isMade = Self.makeWallpaper(at: wallpaper, light: isDark ? current ?? file : file, dark: isDark ? file : current ?? file)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isChanging = false
+                guard isMade else {
+                    NSLog("Safelight: couldn't make a wallpaper of \(file.path)")
+                    try? FileManager.default.removeItem(at: wallpaper.deletingLastPathComponent())
+                    return
+                }
+                for screen in NSScreen.screens {
+                    var options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
+                    if let allSpacesOption = Self.allSpacesOption {
+                        options[allSpacesOption] = true
+                    }
+                    do {
+                        try NSWorkspace.shared.setDesktopImageURL(wallpaper, for: screen, options: options)
+                    } catch {
+                        NSLog("Safelight: couldn't set the wallpaper of \(screen.localizedName): \(error)")
+                    }
+                }
+                // Only once every Space has the new one: another Space may still show one from before
+                if Self.allSpacesOption != nil {
+                    self.removeWallpapers(except: wallpaper)
+                }
+                self.showPictures(of: wallpaper)
+            }
+        }
+    }
+
+    /// Whether `wallpaper` is one Safelight made
+    private func isMadeHere(_ wallpaper: URL) -> Bool {
+        guard let folder else { return false }
+        return wallpaper.standardizedFileURL.deletingLastPathComponent().deletingLastPathComponent().path == folder.standardizedFileURL.path
+    }
+
+    /// Takes away the wallpapers made before `wallpaper`, now it's on every desktop instead
+    private func removeWallpapers(except wallpaper: URL) {
+        guard let folder, let made = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
+        for old in made where old.lastPathComponent != wallpaper.deletingLastPathComponent().lastPathComponent {
+            try? FileManager.default.removeItem(at: old)
+        }
+    }
+
+    /// Writes a wallpaper with `light`'s picture for Light and `dark`'s for Dark, or when that's the same
+    /// picture, a plain one of it.
+    private static func makeWallpaper(at wallpaper: URL, light: URL, dark: URL) -> Bool {
+        guard let lightSource = CGImageSourceCreateWithURL(light as CFURL, nil),
+              let darkSource = light == dark ? lightSource : CGImageSourceCreateWithURL(dark as CFURL, nil) else { return false }
+        let lightIndex = index(in: lightSource, isDark: false)
+        let darkIndex = index(in: darkSource, isDark: true)
+        let isOnePicture = lightSource === darkSource && lightIndex == darkIndex
+        guard let lightPicture = picture(in: lightSource, at: lightIndex),
+              let darkPicture = isOnePicture ? lightPicture : picture(in: darkSource, at: darkIndex),
+              (try? FileManager.default.createDirectory(at: wallpaper.deletingLastPathComponent(), withIntermediateDirectories: true)) != nil,
+              let destination = CGImageDestinationCreateWithURL(wallpaper as CFURL, UTType.heic.identifier as CFString, isOnePicture ? 1 : 2, nil)
+        else { return false }
+
+        // About the size of macOS's own wallpapers for their pictures' size
+        let options = [kCGImageDestinationLossyCompressionQuality: 0.95] as CFDictionary
+        if isOnePicture {
+            CGImageDestinationAddImage(destination, lightPicture, options)
+        } else {
+            let metadata = CGImageMetadataCreateMutable()
+            let indexes = ["l": 0, "d": 1]
+            guard CGImageMetadataRegisterNamespaceForPrefix(metadata, metadataNamespace, metadataPrefix, nil),
+                  let plist = try? PropertyListSerialization.data(fromPropertyList: indexes, format: .binary, options: 0),
+                  CGImageMetadataSetValueWithPath(metadata, nil, appearanceMetadataPath, plist.base64EncodedString() as CFString)
+            else { return false }
+            CGImageDestinationAddImageAndMetadata(destination, lightPicture, metadata, options)
+            CGImageDestinationAddImage(destination, darkPicture, options)
+        }
+        return CGImageDestinationFinalize(destination)
+    }
+
+    /// The pictures in `wallpaper` for Light and for Dark, scaled down to a few hundred pixels, which is
+    /// enough to fill a thumbnail at twice its size, even from a picture much wider than the screen
+    private static func thumbnails(of wallpaper: URL) -> Thumbnails? {
+        guard let source = CGImageSourceCreateWithURL(wallpaper as CFURL, nil),
+              let light = picture(in: source, at: index(in: source, isDark: false), maxPixelSize: 400),
+              let dark = picture(in: source, at: index(in: source, isDark: true), maxPixelSize: 400) else { return nil }
+        return Thumbnails(light: light, dark: dark)
+    }
+
+    /// Which of `source`'s pictures is for an appearance: as its metadata says, or with none, its main one
+    private static func index(in source: CGImageSource, isDark: Bool) -> Int {
+        let main = CGImageSourceGetPrimaryImageIndex(source)
+        guard let metadata = CGImageSourceCopyMetadataAtIndex(source, main, nil),
+              let value = CGImageMetadataCopyStringValueWithPath(metadata, nil, appearanceMetadataPath) as String?,
+              let plist = Data(base64Encoded: value),
+              let indexes = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Int],
+              let index = indexes[isDark ? "d" : "l"], (0..<CGImageSourceGetCount(source)).contains(index) else { return main }
+        return index
+    }
+
+    /// One of `source`'s pictures the right way up, at its full size unless it's to be scaled down
+    private static func picture(in source: CGImageSource, at index: Int, maxPixelSize: Int? = nil) -> CGImage? {
+        var options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true]
+        options[kCGImageSourceThumbnailMaxPixelSize] = maxPixelSize
+        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
+    }
+}
+
+// MARK: - 9. System Strings (System Settings' Translations)
 /// Every label in the app, read from the string tables System Settings (or Control Center, the Dock,
 /// or an app's menus) loads the same label from, so it comes out in the system language, worded
 /// exactly as there.
@@ -3016,6 +3301,7 @@ enum SystemStrings {
     private static let controlCenterSettings = "/System/Library/ExtensionKit/Extensions/ControlCenterSettings.appex"
     /// Where `AppearancePicker` finds its thumbnails as well.
     static let appearanceSettings = "/System/Library/ExtensionKit/Extensions/Appearance.appex"
+    private static let wallpaperSettings = "/System/Library/ExtensionKit/Extensions/Wallpaper.appex"
     private static let swiftUI = "/System/Library/Frameworks/SwiftUI.framework"
     private static let controlCenter = "/System/Library/CoreServices/ControlCenter.app"
     private static let dock = "/System/Library/CoreServices/Dock.app"
@@ -3042,6 +3328,10 @@ enum SystemStrings {
     static let appearance = lookup("Appearance", in: appearanceSettings, english: "Appearance")
     static let light = lookup("Light", in: appearanceSettings, english: "Light")
     static let dark = lookup("Dark", in: appearanceSettings, english: "Dark")
+
+    // System Settings › Wallpaper, and its button for choosing a picture of your own
+    static let wallpaper = lookup("WALLPAPER", in: wallpaperSettings, english: "Wallpaper")
+    static let addPhoto = lookup("ADD_PHOTO", in: wallpaperSettings, english: "Add Photo…")
 
     // System Settings › Accessibility's buttons for lists, and System Settings › Control Center's Time
     static let add = lookup("global.button.add", in: accessibilitySettings, english: "Add")

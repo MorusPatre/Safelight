@@ -11,7 +11,7 @@ It lives in the menu bar.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/popover-dark.png">
-    <img src="docs/popover-light.png" width="418" alt="Safelight's icon in the menu bar, beside Wi-Fi, Spotlight, Control Center and the clock, with its controls open below it: Schedule, Color filters, Intensity, Tint, Brightness, Adjust Independently and Appearance">
+    <img src="docs/popover-light.png" width="418" alt="Safelight's icon in the menu bar, beside Wi-Fi, Spotlight, Control Center and the clock, with its controls open below it: Schedule, Color filters, Intensity, Tint, Brightness, Adjust Independently, Appearance and Wallpaper">
   </picture>
 </p>
 
@@ -21,6 +21,7 @@ It lives in the menu bar.
 - **Brightness for every display.** Set them all as one, or turn on Adjust Independently to give each display its own brightness, in the schedule too. Displays that let the Mac set their brightness are set directly. The rest, like most external monitors, are dimmed in software, and an iPad used with Sidecar under a dark layer.
 - **Brightness keys for every display.** With Adjust Independently on, the brightness keys set the display under the pointer, whichever it is. Catching the keys takes Accessibility permission, which macOS asks for when you turn it on.
 - **Light and Dark too.** Each time of day can switch the system between Light and Dark appearance.
+- **A wallpaper for each.** Choose a picture for Light and another for Dark, and the desktop fades over between them as the appearance switches, whatever switches it: Safelight, System Settings, Control Center or Auto. Safelight makes them one wallpaper, the way macOS's own Light and Dark wallpapers are made, so macOS does the changing itself, on every Space.
 - **One schedule for all of it.** Add as many times of day as you like. Each sets the color filter, intensity, tint, brightness and appearance, and the filter and brightness fade smoothly between them. The strip along the top previews the whole day.
 - **Looks and speaks like macOS.** The controls are the ones System Settings uses, and every label comes from System Settings' own translations, so Safelight appears in your Mac's language.
 
@@ -31,7 +32,7 @@ It lives in the menu bar.
   </picture>
 </p>
 
-Click the menu bar icon for the controls, and the gear next to Schedule to edit the schedule. Right-click (or Control-click) the icon for Open at Login, Automatic Updates, Check for Updates… and Quit. Reset and Quit turn the schedule and color filter off and set brightness back to full.
+Click the menu bar icon for the controls, the gear next to Schedule to edit the schedule, and the Light or Dark wallpaper to choose its picture. Right-click (or Control-click) the icon for Open at Login, Automatic Updates, Check for Updates… and Quit. Reset and Quit turn the schedule and color filter off and set brightness back to full.
 
 ## Install
 
