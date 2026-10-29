@@ -781,6 +781,7 @@ struct AppearancePicker: View {
 
     private static let artwork = Bundle(path: SystemStrings.appearanceSettings)
     private static let thumbnailSize = CGSize(width: 67, height: 44)
+    private static let thumbnailCornerRadius: CGFloat = 5
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -800,7 +801,7 @@ struct AppearancePicker: View {
                         // Loaded by name: with `Image(nsImage:)` the picker's dimming takes 0.3 s longer to be over
                         ZStack {
                             Image(thumbnail, bundle: artwork)
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                .clipShape(RoundedRectangle(cornerRadius: Self.thumbnailCornerRadius))
                             Image("selectionColor_mask", bundle: artwork)
                                 .renderingMode(.template)
                                 .foregroundStyle(Color.accentColor)
@@ -845,7 +846,7 @@ struct AppearancePicker: View {
         let size = NSSize(width: (thumbnailSize.width * scale).rounded(), height: height)
 
         let image = NSImage(size: size, flipped: false) { rect in
-            let cornerRadius = 5 * scale
+            let cornerRadius = cornerRadius(ofThumbnail: height)
             guard let thumbnail else {
                 // The same plain window colour stands in
                 let outline = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: cornerRadius, yRadius: cornerRadius)
@@ -869,28 +870,41 @@ struct AppearancePicker: View {
         image.accessibilityDescription = isDark ? SystemStrings.dark : SystemStrings.light
         return image
     }
+
+    /// The radius of the corners of a thumbnail scaled down to `height`
+    static func cornerRadius(ofThumbnail height: CGFloat) -> CGFloat {
+        thumbnailCornerRadius * height / thumbnailSize.height
+    }
 }
 
 /// Light and Dark for a keyframe in the Schedule window: a segmented control with the Appearance
 /// picker's thumbnails in its segments. It's AppKit's own control rather than a segmented `Picker`,
 /// whose segments leave 5 pt either side of an image, so the segments' widths can be set: each
-/// thumbnail leaves `border` above and below it, and its segment is that much wider either side, so
-/// the selection shows as an even, thin border around the chosen one.
+/// thumbnail leaves `border` above and below it, and its segment is that much wider either side.
+/// AppKit's selection would fill the chosen segment out to corners of its own, far rounder than the
+/// thumbnail's, and right up to the thumbnail, hard to tell from the blue in it. So `Cell` draws the
+/// control instead, as AppKit's own looks but with a thin ring around the chosen thumbnail, a gap
+/// between them, and corners that follow the thumbnail's.
 struct AppearanceSegments: NSViewRepresentable {
     @Binding var isDark: Bool
 
-    private static let border: CGFloat = 2
-    /// The height of a segmented control, which the selection fills
+    private static let ringWidth: CGFloat = 2
+    private static let gap: CGFloat = 1
+    private static let border = ringWidth + gap
+    /// The height of a segmented control, which each segment is
     private static let controlHeight = NSSegmentedControl(labels: [""], trackingMode: .selectOne, target: nil, action: nil).fittingSize.height
-    private static let thumbnails = [false, true].map { AppearancePicker.thumbnail(isDark: $0, height: controlHeight - 2 * border) }
+    private static let thumbnailHeight = controlHeight - 2 * border
+    private static let thumbnails = [false, true].map { AppearancePicker.thumbnail(isDark: $0, height: thumbnailHeight) }
     private static let segmentWidths = thumbnails.map { $0.size.width + 2 * border }
+    /// The corners of the track, the ring and a pressed segment, around the thumbnail's
+    private static let cornerRadius = AppearancePicker.cornerRadius(ofThumbnail: thumbnailHeight) + border
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
     func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl(
+        let control = Control(
             images: Self.thumbnails, trackingMode: .selectOne,
             target: context.coordinator, action: #selector(Coordinator.selectionDidChange(_:))
         )
@@ -904,8 +918,9 @@ struct AppearanceSegments: NSViewRepresentable {
 
     // The size is given rather than asked of the control. One made while SwiftUI is updating, as a
     // row added with + is, takes the widths set above only afterwards, and until then measures as if
-    // its segments had their own widths (80 pt instead of 68); once they arrive it doesn't say its size
-    // has changed, so the row kept the wider frame, with the segments centred in it, out of line.
+    // its segments had their own widths (80 pt instead of 68 when it happened); once they arrive it
+    // doesn't say its size has changed, so the row kept the wider frame, with the segments centred in
+    // it, out of line.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context: Context) -> CGSize? {
         CGSize(width: Self.segmentWidths.reduce(0, +), height: Self.controlHeight)
     }
@@ -921,6 +936,107 @@ struct AppearanceSegments: NSViewRepresentable {
 
         @objc func selectionDidChange(_ sender: NSSegmentedControl) {
             selectionDidChangeHandler(sender.selectedSegment == 1)
+        }
+    }
+
+    final class Control: NSSegmentedControl {
+        override class var cellClass: AnyClass? {
+            get { Cell.self }
+            set {}
+        }
+    }
+
+    /// Draws the control in place of AppKit, which still handles clicks, keys, tooltips and VoiceOver.
+    /// Its track, the pressed segment and the selection in a window that isn't key are the colours of
+    /// AppKit's own on macOS 27, and disabled, the thumbnails and ring are half as opaque, as there.
+    final class Cell: NSSegmentedCell {
+        /// The segment under the pointer while the control is pressed, darker until it's let go,
+        /// or until the pointer leaves the control
+        private var pressedSegment: Int?
+
+        override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
+            NSColor.secondarySystemFill.setFill()
+            NSBezierPath(roundedRect: cellFrame, xRadius: cornerRadius, yRadius: cornerRadius).fill()
+
+            let context = NSGraphicsContext.current?.cgContext
+            let isKey = controlView.window?.isKeyWindow ?? false
+            for segment in 0..<segmentCount {
+                guard let image = image(forSegment: segment) else { continue }
+                let imageRect = imageRect(of: image, inSegment: segment, of: cellFrame)
+                let outline = outline(around: imageRect)
+                if segment == pressedSegment {
+                    NSColor.labelColor.withAlphaComponent(0.16).setFill()
+                    outline.fill()
+                }
+
+                // In a layer of its own, as drawing an image sets the context's alpha to its own
+                context?.saveGState()
+                context?.setAlpha(isEnabled ? 1 : 0.5)
+                context?.beginTransparencyLayer(auxiliaryInfo: nil)
+                if isSelected(forSegment: segment) {
+                    let ringRect = imageRect.insetBy(dx: -border + ringWidth, dy: -border + ringWidth)
+                    outline.append(NSBezierPath(roundedRect: ringRect, xRadius: cornerRadius - ringWidth, yRadius: cornerRadius - ringWidth))
+                    outline.windingRule = .evenOdd
+                    (isKey ? NSColor.controlAccentColor : NSColor.labelColor.withAlphaComponent(0.12)).setFill()
+                    outline.fill()
+                }
+                image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                context?.endTransparencyLayer()
+                context?.restoreGState()
+            }
+        }
+
+        // Around the segment the arrow keys are on, as AppKit's own is, but with the corners above.
+        // AppKit only says which that is privately; without it, the ring is AppKit's own.
+        override func drawFocusRingMask(withFrame cellFrame: NSRect, in controlView: NSView) {
+            guard responds(to: NSSelectorFromString("_keySegment")), let segment = value(forKey: "_keySegment") as? Int,
+                  (0..<segmentCount).contains(segment), let image = image(forSegment: segment) else {
+                super.drawFocusRingMask(withFrame: cellFrame, in: controlView)
+                return
+            }
+            outline(around: imageRect(of: image, inSegment: segment, of: cellFrame)).fill()
+        }
+
+        override func startTracking(at startPoint: NSPoint, in controlView: NSView) -> Bool {
+            press(at: startPoint, in: controlView)
+            return super.startTracking(at: startPoint, in: controlView)
+        }
+
+        override func continueTracking(last lastPoint: NSPoint, current currentPoint: NSPoint, in controlView: NSView) -> Bool {
+            press(at: currentPoint, in: controlView)
+            return super.continueTracking(last: lastPoint, current: currentPoint, in: controlView)
+        }
+
+        override func stopTracking(last lastPoint: NSPoint, current stopPoint: NSPoint, in controlView: NSView, mouseIsUp flag: Bool) {
+            press(at: nil, in: controlView)
+            super.stopTracking(last: lastPoint, current: stopPoint, in: controlView, mouseIsUp: flag)
+        }
+
+        private func press(at point: NSPoint?, in controlView: NSView) {
+            let segment = point.flatMap { point in
+                (0..<segmentCount).first { frame(ofSegment: $0, in: controlView.bounds).contains(point) }
+            }
+            if segment != pressedSegment {
+                pressedSegment = segment
+                controlView.needsDisplay = true
+            }
+        }
+
+        private func frame(ofSegment segment: Int, in cellFrame: NSRect) -> NSRect {
+            let x = (0..<segment).reduce(cellFrame.minX) { $0 + width(forSegment: $1) }
+            return NSRect(x: x, y: cellFrame.minY, width: width(forSegment: segment), height: cellFrame.height)
+        }
+
+        /// A segment's thumbnail, in the middle of it
+        private func imageRect(of image: NSImage, inSegment segment: Int, of cellFrame: NSRect) -> NSRect {
+            let frame = frame(ofSegment: segment, in: cellFrame)
+            return NSRect(x: frame.midX - image.size.width / 2, y: frame.midY - image.size.height / 2,
+                          width: image.size.width, height: image.size.height)
+        }
+
+        /// A thumbnail and the border around it, which the ring and a pressed segment fill
+        private func outline(around imageRect: NSRect) -> NSBezierPath {
+            NSBezierPath(roundedRect: imageRect.insetBy(dx: -border, dy: -border), xRadius: cornerRadius, yRadius: cornerRadius)
         }
     }
 }
