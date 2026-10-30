@@ -1141,6 +1141,7 @@ final class WallpaperWindow: NSObject, ObservableObject {
 
     func show(isDark: Bool) {
         self.isDark = isDark
+        YourPhotos.shared.reload()
         if window == nil {
             let hostingController = NSHostingController(rootView: WallpaperGallery())
             hostingController.sizingOptions = [.minSize, .maxSize]
@@ -1206,6 +1207,7 @@ final class WallpaperWindow: NSObject, ObservableObject {
 struct WallpaperGallery: View {
     @ObservedObject var wallpaper = WallpaperManager.shared
     @ObservedObject var window = WallpaperWindow.shared
+    @ObservedObject var photos = YourPhotos.shared
     /// The sections showing all their wallpapers, not only a row
     @State private var expandedSections: Set<String> = []
     @State private var isChoosingPhoto = false
@@ -1310,14 +1312,15 @@ struct WallpaperGallery: View {
     private func group(_ section: WallpaperLibrary.Section) -> some View {
         let isExpanded = expandedSections.contains(section.id)
         let columns = section.kind == .colors ? 8 : 4
+        let items = section.kind == .photos ? photos.items : section.items
         // Add Photo… and the custom colour count as one of the section's
-        let count = section.items.count + (section.kind == .pictures ? 0 : 1)
+        let count = items.count + (section.kind == .pictures ? 0 : 1)
         return VStack(alignment: .leading, spacing: Self.spacing) {
             HStack(spacing: Self.spacing) {
                 Text(section.title)
                     .fontWeight(.medium)
                 Spacer()
-                if count > columns || section.row.map({ $0.count < section.items.count }) == true {
+                if count > columns || section.row.map({ $0.count < items.count }) == true {
                     Button(isExpanded ? SystemStrings.showLess : String(format: SystemStrings.showAll, "\(count)")) {
                         if isExpanded {
                             expandedSections.remove(section.id)
@@ -1332,13 +1335,13 @@ struct WallpaperGallery: View {
             if isExpanded {
                 let width = section.kind == .colors ? Self.colorSize : Self.thumbnailSize.width
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(width), spacing: Self.spacing), count: columns), alignment: .leading, spacing: Self.spacing) {
-                    items(of: section, section.items)
+                    self.items(of: section, items)
                 }
             } else {
                 // The width of the window, scrolling under its margins
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: Self.spacing) {
-                        items(of: section, section.row ?? section.items)
+                        self.items(of: section, section.row ?? items)
                     }
                     .scrollTargetLayout()
                 }
@@ -1381,25 +1384,37 @@ struct WallpaperGallery: View {
             wallpaper.choose(item, isDark: window.isDark)
         } label: {
             VStack(spacing: 3) {
-                WallpaperThumbnail(file: window.isDark ? item.darkThumbnail : item.lightThumbnail)
-                    .overlay(alignment: .bottomLeading) {
-                        if let badge = item.badge {
-                            ThumbnailBadge(image: badge == .dynamic ? ThumbnailBadge.dynamic : Image(systemName: "play.rectangle.fill"))
-                                .padding([.bottom, .leading], 5)
-                        }
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        Group {
-                            if wallpaper.changingChoice == item.id {
-                                progress
-                                    .frame(width: 13, height: 13)
-                            } else if !item.isOnMac {
-                                ThumbnailBadge(image: Image(systemName: "arrow.down.circle"))
+                Group {
+                    if isMissing(item) {
+                        Rectangle()
+                            .fill(.background)
+                            .overlay {
+                                Image(systemName: "exclamationmark.icloud")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(.tertiary)
                             }
-                        }
-                        .padding([.bottom, .trailing], 5)
+                    } else {
+                        WallpaperThumbnail(file: window.isDark ? item.darkThumbnail : item.lightThumbnail)
                     }
-                    .modifier(ThumbnailFrame(size: Self.thumbnailSize, cornerRadius: Self.thumbnailCornerRadius, isSelected: isSelected))
+                }
+                .overlay(alignment: .bottomLeading) {
+                    if let badge = item.badge {
+                        ThumbnailBadge(image: badge == .dynamic ? ThumbnailBadge.dynamic : Image(systemName: "play.rectangle.fill"))
+                            .padding([.bottom, .leading], 5)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Group {
+                        if wallpaper.changingChoice == item.id {
+                            progress
+                                .frame(width: 13, height: 13)
+                        } else if !item.isOnMac {
+                            ThumbnailBadge(image: Image(systemName: "arrow.down.circle"))
+                        }
+                    }
+                    .padding([.bottom, .trailing], 5)
+                }
+                .modifier(ThumbnailFrame(size: Self.thumbnailSize, cornerRadius: Self.thumbnailCornerRadius, isSelected: isSelected))
                 if showsName {
                     Text(item.name)
                         .font(.caption)
@@ -1412,9 +1427,16 @@ struct WallpaperGallery: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isMissing(item))
         .help(item.name)
         .accessibilityLabel(item.name)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// Whether a photo of the user's is gone, with no copy of it left: Your Photos' are the only
+    /// wallpapers with no thumbnail
+    private func isMissing(_ item: WallpaperItem) -> Bool {
+        item.lightThumbnail == nil && photos.items.contains(item)
     }
 
     /// One of System Settings' colours, as a round swatch
@@ -3791,6 +3813,10 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
             removeWallpapers(except: wallpaper)
         }
         showPictures(of: wallpaper)
+        // System Settings adds the wallpaper to Your Photos a moment after it's on the desktop
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            YourPhotos.shared.reload()
+        }
         // Until then, the other appearance took its picture from the same wallpaper
         var choices = current == nil ? Choices(light: choice, dark: choice) : choices
         if isDark {
@@ -4070,7 +4096,7 @@ final class WallpaperLibrary {
         var row: [WallpaperItem]?
     }
 
-    /// The ID of Your Photos, which lists no wallpapers: a photo is chosen from Photos or a file instead
+    /// The ID of Your Photos, whose wallpapers are the user's own, in `YourPhotos`
     static let yourPhotos = "your-photos"
 
     let sections: [Section]
@@ -4316,9 +4342,9 @@ final class WallpaperLibrary {
                              lightThumbnail: thumbnail(" Light") ?? thumbnail("") ?? file, darkThumbnail: thumbnail(" Dark") ?? thumbnail("") ?? file, badge: badge)
     }
 
-    /// Whether a picture of macOS's has one for Light and one for Dark, or for times of day, as its
-    /// dynamic wallpapers have
-    private static func hasPictureForEachAppearance(_ file: URL) -> Bool {
+    /// Whether a picture has one for Light and one for Dark, or for times of day, as macOS's dynamic
+    /// wallpapers have
+    static func hasPictureForEachAppearance(_ file: URL) -> Bool {
         guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
               let metadata = CGImageSourceCopyMetadataAtIndex(source, CGImageSourceGetPrimaryImageIndex(source), nil) else { return false }
         return ["apple_desktop:apr", "apple_desktop:solar", "apple_desktop:h24"].contains { CGImageMetadataCopyTagWithPath(metadata, nil, $0 as CFString) != nil }
@@ -4328,6 +4354,65 @@ final class WallpaperLibrary {
     private static func thumbnail(ofAerial id: String) -> URL? {
         [aerials.appendingPathComponent("thumbnails/\(id).png"), aerialsExtension.appendingPathComponent("\(id).png")]
             .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+}
+
+/// System Settings › Wallpaper's Your Photos: the pictures of the user's own it has been given, from its
+/// Add Photo… or as an app's wallpaper, newest first. Its image extension keeps the list, and a copy of
+/// each picture, in its container, so reading them is reading another app's data, which macOS asks the
+/// user about the first time; it's read when the Wallpaper window opens, where that question makes sense.
+/// Its shuffle of them all has no one picture, so it isn't here.
+final class YourPhotos: ObservableObject {
+    static let shared = YourPhotos()
+    @Published private(set) var items: [WallpaperItem] = []
+
+    private static let list = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Containers/com.apple.wallpaper.extension.image/Data/Library/Preferences/com.apple.wallpaper.extension.image.plist")
+
+    /// One of the list's pictures, as the extension writes it
+    private struct ImageFile: Decodable {
+        let dateAdded: Date
+        let originalURL: URL
+        let originalURLBookmarkData: Data?
+        /// The extension's copy, which is there after the picture itself is moved or gone
+        let copyURL: URL?
+    }
+
+    /// Reads the list again, as System Settings adds to it whenever a wallpaper is set
+    func reload() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let items = Self.read()
+            DispatchQueue.main.async {
+                if items != self.items {
+                    self.items = items
+                }
+            }
+        }
+    }
+
+    private static func read() -> [WallpaperItem] {
+        guard let data = try? Data(contentsOf: list),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let entries = root["ChoiceRequests.ImageFiles"] as? [Data] else { return [] }
+        let files = entries.compactMap { try? PropertyListDecoder().decode(ImageFile.self, from: $0) }
+        // Newest first, to the second, and those added in the same second in the list's order
+        let newestFirst = files.enumerated().sorted { (-Int($0.element.dateAdded.timeIntervalSinceReferenceDate), $0.offset) < (-Int($1.element.dateAdded.timeIntervalSinceReferenceDate), $1.offset) }.map(\.element)
+        return newestFirst.map { file in
+            let name = file.originalURL.deletingPathExtension().lastPathComponent
+            // Where System Settings loads it from: its copy, or else the picture itself, wherever it's been
+            // moved to. With neither, its thumbnail is an iCloud symbol, as System Settings draws it.
+            let bookmarked = file.originalURLBookmarkData.flatMap { bookmark in
+                var isStale = false
+                return try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &isStale)
+            }
+            guard let picture = [file.copyURL, bookmarked, file.originalURL].lazy.compactMap({ $0 }).first(where: { (try? $0.checkResourceIsReachable()) == true }) else {
+                return WallpaperItem(id: "photo:\(file.originalURL.path)", name: name, light: .file(file.originalURL), dark: .file(file.originalURL),
+                                     lightThumbnail: nil, darkThumbnail: nil)
+            }
+            return WallpaperItem(id: "photo:\(file.originalURL.path)", name: name, light: .file(picture), dark: .file(picture),
+                                 lightThumbnail: picture, darkThumbnail: picture,
+                                 badge: WallpaperLibrary.hasPictureForEachAppearance(picture) ? .dynamic : nil)
+        }
     }
 }
 
