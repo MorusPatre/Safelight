@@ -74,7 +74,7 @@ if [[ -f "$KEY" ]] && SIGNATURE=$("$SPARKLE/sign_update" --ed-key-file "$KEY" "$
     INFO="$OUT/Safelight.app/Contents/Info.plist"
     BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$INFO")
     MINIMUM_SYSTEM=$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$INFO")
-    RELEASE="https://github.com/MorusPatre/Safelight/releases"
+    RELEASE="https://github.com/mopfaff/Safelight/releases"
     cat >"$APPCAST" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">

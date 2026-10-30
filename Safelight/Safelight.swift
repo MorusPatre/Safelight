@@ -131,9 +131,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let credits = NSMutableAttributedString()
         let links = [
-            (SystemStrings.sourceCode, "https://github.com/MorusPatre/Safelight"),
-            (SystemStrings.reportAnIssue, "https://github.com/MorusPatre/Safelight/issues"),
-            ("GitHub Sponsors", "https://github.com/sponsors/MorusPatre"),
+            (SystemStrings.sourceCode, "https://github.com/mopfaff/Safelight"),
+            (SystemStrings.reportAnIssue, "https://github.com/mopfaff/Safelight/issues"),
+            ("GitHub Sponsors", "https://github.com/sponsors/mopfaff"),
         ]
         for (title, url) in links {
             if credits.length > 0 {

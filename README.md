@@ -38,7 +38,7 @@ Click the menu bar icon for the controls, the gear next to Schedule to edit the 
 
 Safelight needs macOS 15.5 or later, on Apple silicon or Intel.
 
-1. Download the Safelight disk image (`.dmg`) from the [latest release](https://github.com/MorusPatre/Safelight/releases/latest), open it, and drag Safelight onto the Applications folder beside it.
+1. Download the Safelight disk image (`.dmg`) from the [latest release](https://github.com/mopfaff/Safelight/releases/latest), open it, and drag Safelight onto the Applications folder beside it.
 2. Open Safelight. It isn't notarized by Apple, so macOS says it can't check it for malware. Click **Done**.
 3. Open **System Settings › Privacy & Security**, scroll down, and click **Open Anyway** next to the message about Safelight. Confirm with your password.
 
@@ -53,7 +53,7 @@ Safelight keeps itself up to date. Once a day it looks for a new release here, d
 You need Xcode 26 or later.
 
 ```bash
-git clone https://github.com/MorusPatre/Safelight.git
+git clone https://github.com/mopfaff/Safelight.git
 cd Safelight
 scripts/release.sh
 ```
@@ -62,12 +62,12 @@ Xcode fetches Sparkle the first time. The app ends up in `build/release`. A copy
 
 ## How it works
 
-Safelight doesn't draw anything over your screen. It changes the same settings System Settings does, through the functions System Settings itself calls. Those functions aren't part of Apple's public developer APIs, which is also why Safelight isn't on the Mac App Store, and a macOS update could change them. If something stops working after an update, please [open an issue](https://github.com/MorusPatre/Safelight/issues).
+Safelight doesn't draw anything over your screen. It changes the same settings System Settings does, through the functions System Settings itself calls. Those functions aren't part of Apple's public developer APIs, which is also why Safelight isn't on the Mac App Store, and a macOS update could change them. If something stops working after an update, please [open an issue](https://github.com/mopfaff/Safelight/issues).
 
 ## Support
 
-Safelight is free and open source. If it's useful to you, you can support its development through [GitHub Sponsors](https://github.com/sponsors/MorusPatre).
+Safelight is free and open source. If it's useful to you, you can support its development through [GitHub Sponsors](https://github.com/sponsors/mopfaff).
 
 ## License
 
-Copyright © 2025–2026 MorusPatre. Safelight is licensed under the [GNU General Public License v3.0](LICENSE).
+Copyright © 2025–2026 mopfaff. Safelight is licensed under the [GNU General Public License v3.0](LICENSE).

@@ -291,7 +291,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Safelight/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025–2026 MorusPatre. Licensed under the GNU GPL v3.0.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025–2026 mopfaff. Licensed under the GNU GPL v3.0.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -325,7 +325,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Safelight/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025–2026 MorusPatre. Licensed under the GNU GPL v3.0.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025–2026 mopfaff. Licensed under the GNU GPL v3.0.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
