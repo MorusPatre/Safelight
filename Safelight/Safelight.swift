@@ -67,6 +67,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .utility).async {
             _ = WallpaperLibrary.shared
         }
+        // Shuffles that change at login do now, and the others carry on where they were
+        WallpaperShuffler.shared.resume()
     }
     
     /// A click opens the popover; a right-click or Control-click opens the menu instead.
@@ -1126,7 +1128,7 @@ struct WallpaperPicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(wallpaper.choice(isDark: isDark).flatMap { WallpaperLibrary.shared.item($0)?.name } ?? "")
+        .help(wallpaper.choice(isDark: isDark).flatMap { WallpaperLibrary.shared.name(of: $0) } ?? "")
     }
 }
 
@@ -1208,6 +1210,7 @@ struct WallpaperGallery: View {
     @ObservedObject var wallpaper = WallpaperManager.shared
     @ObservedObject var window = WallpaperWindow.shared
     @ObservedObject var photos = YourPhotos.shared
+    @ObservedObject var shuffler = WallpaperShuffler.shared
     /// The sections showing all their wallpapers, not only a row
     @State private var expandedSections: Set<String> = []
     @State private var isChoosingPhoto = false
@@ -1231,9 +1234,12 @@ struct WallpaperGallery: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 24) {
-                preview(SystemStrings.light, picture: wallpaper.thumbnails?.light, isDark: false)
-                preview(SystemStrings.dark, picture: wallpaper.thumbnails?.dark, isDark: true)
+            VStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 24) {
+                    preview(SystemStrings.light, picture: wallpaper.thumbnails?.light, isDark: false)
+                    preview(SystemStrings.dark, picture: wallpaper.thumbnails?.dark, isDark: true)
+                }
+                shuffleInterval
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
@@ -1307,14 +1313,36 @@ struct WallpaperGallery: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// How often the appearance being chosen changes its picture, while it's a shuffle's, as System
+    /// Settings shows beside a shuffle. Its room is kept while there's none, so the window doesn't move.
+    private var shuffleInterval: some View {
+        let shuffle = shuffler.shuffle(isDark: window.isDark)
+        let interval = Binding {
+            shuffle?.interval ?? .hour
+        } set: {
+            shuffler.setInterval($0, isDark: window.isDark)
+        }
+        return Picker(SystemStrings.shuffle, selection: interval) {
+            ForEach(WallpaperShuffle.intervals(for: shuffle?.id ?? WallpaperShuffle.photos), id: \.self) { interval in
+                Text(interval.title)
+                    .tag(interval)
+            }
+        }
+        .fixedSize()
+        .opacity(shuffle == nil ? 0 : 1)
+        .disabled(shuffle == nil)
+        .accessibilityHidden(shuffle == nil)
+    }
+
     /// A section: its title, with Show All beside it when there's more than a row, and a row of its
     /// wallpapers that scrolls sideways, or all of them
     private func group(_ section: WallpaperLibrary.Section) -> some View {
         let isExpanded = expandedSections.contains(section.id)
         let columns = section.kind == .colors ? 8 : 4
         let items = section.kind == .photos ? photos.items : section.items
+        let shuffles = section.kind == .photos ? Array(photos.shuffle.map { [$0] } ?? []) : section.shuffles
         // Add Photo… and the custom colour count as one of the section's
-        let count = items.count + (section.kind == .pictures ? 0 : 1)
+        let count = shuffles.count + items.count + (section.kind == .photos || section.kind == .colors ? 1 : 0)
         return VStack(alignment: .leading, spacing: Self.spacing) {
             HStack(spacing: Self.spacing) {
                 Text(section.title)
@@ -1335,13 +1363,13 @@ struct WallpaperGallery: View {
             if isExpanded {
                 let width = section.kind == .colors ? Self.colorSize : Self.thumbnailSize.width
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(width), spacing: Self.spacing), count: columns), alignment: .leading, spacing: Self.spacing) {
-                    self.items(of: section, items)
+                    self.items(of: section, shuffles, items)
                 }
             } else {
                 // The width of the window, scrolling under its margins
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: Self.spacing) {
-                        self.items(of: section, section.row ?? items)
+                        self.items(of: section, shuffles, section.row ?? items)
                     }
                     .scrollTargetLayout()
                 }
@@ -1352,23 +1380,39 @@ struct WallpaperGallery: View {
             }
         }
         // Where the other sections have their wallpapers' names
-        .padding(.bottom, section.kind == .pictures ? 0 : 10)
+        .padding(.bottom, section.kind == .pictures || section.kind == .shuffles ? 0 : 10)
     }
 
+    /// A section's tiles, in System Settings' order: Add Photo… and then the photos' shuffle, or the
+    /// colours' shuffle and then the custom colour, before the wallpapers
     @ViewBuilder
-    private func items(of section: WallpaperLibrary.Section, _ items: [WallpaperItem]) -> some View {
+    private func items(of section: WallpaperLibrary.Section, _ shuffles: [WallpaperShuffle], _ items: [WallpaperItem]) -> some View {
         switch section.kind {
         case .pictures:
             ForEach(items) { item in
                 thumbnail(item, showsName: true)
             }
+        case .shuffles:
+            ForEach(shuffles) { shuffle in
+                thumbnail(shuffle, showsName: true)
+            }
         case .photos:
             addPhoto
+            ForEach(shuffles) { shuffle in
+                thumbnail(shuffle, showsName: false)
+            }
             ForEach(items) { item in
                 thumbnail(item, showsName: false)
             }
         case .colors:
-            customColor
+            ForEach(shuffles) { shuffle in
+                circleButton("arrow.triangle.2.circlepath", name: shuffle.name, id: shuffle.id) {
+                    shuffler.start(shuffle, isDark: window.isDark)
+                }
+            }
+            circleButton("plus", name: SystemStrings.customColor) {
+                window.chooseColor()
+            }
             ForEach(items) { item in
                 swatch(item)
             }
@@ -1379,44 +1423,59 @@ struct WallpaperGallery: View {
     /// left, whether it's dynamic or a video, and at the bottom right, whether it's yet to be downloaded,
     /// or how much of it has been
     private func thumbnail(_ item: WallpaperItem, showsName: Bool) -> some View {
-        let isSelected = wallpaper.choice(isDark: window.isDark) == item.id
-        return Button {
+        tile(id: item.id, name: item.name, showsName: showsName, badge: item.badge, isOnMac: item.isOnMac, isMissing: isMissing(item)) {
             wallpaper.choose(item, isDark: window.isDark)
-        } label: {
+        } thumbnail: {
+            if isMissing(item) {
+                Rectangle()
+                    .fill(.background)
+                    .overlay {
+                        Image(systemName: "exclamationmark.icloud")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.tertiary)
+                    }
+            } else {
+                WallpaperThumbnail(file: window.isDark ? item.darkThumbnail : item.lightThumbnail)
+            }
+        }
+    }
+
+    /// A shuffle's thumbnail: four of its pictures under the symbol for shuffling
+    private func thumbnail(_ shuffle: WallpaperShuffle, showsName: Bool) -> some View {
+        tile(id: shuffle.id, name: shuffle.name, showsName: showsName, badge: shuffle.isAerials ? .video : nil) {
+            shuffler.start(shuffle, isDark: window.isDark)
+        } thumbnail: {
+            ShuffleThumbnail(files: shuffle.thumbnails, size: Self.thumbnailSize)
+        }
+    }
+
+    /// A thumbnail as System Settings draws one, with its badges, and its name under it
+    private func tile(id: String, name: String, showsName: Bool, badge: WallpaperItem.Badge?, isOnMac: Bool = true, isMissing: Bool = false,
+                      action: @escaping () -> Void, @ViewBuilder thumbnail: () -> some View) -> some View {
+        let isSelected = wallpaper.choice(isDark: window.isDark) == id
+        return Button(action: action) {
             VStack(spacing: 3) {
-                Group {
-                    if isMissing(item) {
-                        Rectangle()
-                            .fill(.background)
-                            .overlay {
-                                Image(systemName: "exclamationmark.icloud")
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(.tertiary)
-                            }
-                    } else {
-                        WallpaperThumbnail(file: window.isDark ? item.darkThumbnail : item.lightThumbnail)
-                    }
-                }
-                .overlay(alignment: .bottomLeading) {
-                    if let badge = item.badge {
-                        ThumbnailBadge(image: badge == .dynamic ? ThumbnailBadge.dynamic : Image(systemName: "play.rectangle.fill"))
-                            .padding([.bottom, .leading], 5)
-                    }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    Group {
-                        if wallpaper.changingChoice == item.id {
-                            progress
-                                .frame(width: 13, height: 13)
-                        } else if !item.isOnMac {
-                            ThumbnailBadge(image: Image(systemName: "arrow.down.circle"))
+                thumbnail()
+                    .overlay(alignment: .bottomLeading) {
+                        if let badge {
+                            ThumbnailBadge(image: badge == .dynamic ? ThumbnailBadge.dynamic : Image(systemName: "play.rectangle.fill"))
+                                .padding([.bottom, .leading], 5)
                         }
                     }
-                    .padding([.bottom, .trailing], 5)
-                }
-                .modifier(ThumbnailFrame(size: Self.thumbnailSize, cornerRadius: Self.thumbnailCornerRadius, isSelected: isSelected))
+                    .overlay(alignment: .bottomTrailing) {
+                        Group {
+                            if wallpaper.changingChoice == id {
+                                progress
+                                    .frame(width: 13, height: 13)
+                            } else if !isOnMac {
+                                ThumbnailBadge(image: Image(systemName: "arrow.down.circle"))
+                            }
+                        }
+                        .padding([.bottom, .trailing], 5)
+                    }
+                    .modifier(ThumbnailFrame(size: Self.thumbnailSize, cornerRadius: Self.thumbnailCornerRadius, isSelected: isSelected))
                 if showsName {
-                    Text(item.name)
+                    Text(name)
                         .font(.caption)
                         .lineLimit(2, reservesSpace: true)
                         .multilineTextAlignment(.center)
@@ -1427,9 +1486,9 @@ struct WallpaperGallery: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isMissing(item))
-        .help(item.name)
-        .accessibilityLabel(item.name)
+        .disabled(isMissing)
+        .help(name)
+        .accessibilityLabel(name)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -1488,20 +1547,29 @@ struct WallpaperGallery: View {
         .fixedSize()
     }
 
-    /// Colours' first swatch, which, as in System Settings, opens the Colours panel to choose any colour
-    private var customColor: some View {
-        Button {
-            window.chooseColor()
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 24))
-                .foregroundStyle(.secondary)
-                .frame(width: Self.colorSize, height: Self.colorSize)
-                .background(.quaternary, in: Circle())
+    /// One of Colours' first two swatches, a symbol in a grey circle, as in System Settings: the colours'
+    /// shuffle, ringed while it's chosen, and the custom colour, which opens the Colours panel
+    private func circleButton(_ symbol: String, name: String, id: String? = nil, action: @escaping () -> Void) -> some View {
+        let isSelected = id != nil && wallpaper.choice(isDark: window.isDark) == id
+        return Button(action: action) {
+            Circle()
+                .fill(.quaternary)
+                .overlay {
+                    if id != nil && wallpaper.changingChoice == id {
+                        progress
+                    } else {
+                        Image(systemName: symbol)
+                            .font(.system(size: 24))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .modifier(ThumbnailFrame(size: CGSize(width: Self.colorSize, height: Self.colorSize), cornerRadius: Self.colorSize / 2, isSelected: isSelected))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help(SystemStrings.customColor)
-        .accessibilityLabel(SystemStrings.customColor)
+        .help(name)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// Over the picture being fetched: how much of it has downloaded, or a spinner until it's known
@@ -1585,6 +1653,31 @@ struct ThumbnailBadge: View {
             .shadow(color: .black.opacity(0.65), radius: 2)
             .frame(width: 13, height: 13)
             .colorScheme(.dark)
+    }
+}
+
+/// A shuffle's thumbnail, as System Settings draws one: four of its pictures, one in each quarter, under
+/// the symbol for shuffling
+struct ShuffleThumbnail: View {
+    let files: [URL?]
+    let size: CGSize
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<2) { row in
+                HStack(spacing: 0) {
+                    ForEach(0..<2) { column in
+                        WallpaperThumbnail(file: files.indices.contains(2 * row + column) ? files[2 * row + column] : nil)
+                    }
+                }
+            }
+        }
+        .overlay {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 0.75 * min(size.width, size.height) / 2, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+        }
     }
 }
 
@@ -3627,8 +3720,8 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     @Published private(set) var changingChoice: WallpaperItem.ID?
     /// How much of the picture has downloaded, while it's one macOS downloads when it's chosen
     @Published private(set) var downloadProgress: Double?
-    /// The wallpapers of System Settings' whose pictures the desktop has for Light and for Dark, each
-    /// nil for a picture of the user's own. Kept between launches.
+    /// The wallpapers of System Settings' whose pictures the desktop has for Light and for Dark, or the
+    /// shuffles they're from, each nil for a picture of the user's own. Kept between launches.
     @Published private var choices: Choices {
         didSet { UserDefaults.standard.set(try? PropertyListEncoder().encode(choices), forKey: Self.choicesKey) }
     }
@@ -3696,18 +3789,21 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
         }
     }
 
-    /// The wallpaper of System Settings' whose picture the desktop has for an appearance, while its
-    /// wallpaper is one Safelight made and the picture isn't one of the user's own
-    func choice(isDark: Bool) -> WallpaperItem.ID? {
+    /// The wallpaper of System Settings' whose picture the desktop has for an appearance, or the
+    /// shuffle it's from, while its wallpaper is one Safelight made and the picture isn't one of the
+    /// user's own
+    func choice(isDark: Bool) -> String? {
         guard shownWallpaper != nil else { return nil }
         return isDark ? choices.dark : choices.light
     }
 
     /// Makes a wallpaper with `item`'s picture for one appearance, as `setPicture(_:isDark:)` does,
-    /// fetching it first: downloading it, taking it from its video, or drawing it in its colour.
-    func choose(_ item: WallpaperItem, isDark: Bool) {
+    /// fetching it first: downloading it, taking it from its video, or drawing it in its colour. When
+    /// it's a shuffle's picture, the shuffle is what's remembered as the appearance's choice. `completion`
+    /// is told whether the wallpaper was made.
+    func choose(_ item: WallpaperItem, isDark: Bool, from shuffle: WallpaperShuffle.ID? = nil, then completion: ((_ isMade: Bool) -> Void)? = nil) {
         let screenSize = Self.screenSize
-        setPicture(isDark: isDark, choice: item.id, hasPictureForEach: item.light != item.dark) { [weak self] isDark, folder in
+        setPicture(isDark: isDark, choice: shuffle ?? item.id, item: item.id, hasPictureForEach: item.light != item.dark, completion: completion) { [weak self] isDark, folder in
             guard let self else { throw CancellationError() }
             return try await self.file(for: isDark ? item.dark : item.light, in: folder, screenSize: screenSize)
         }
@@ -3716,7 +3812,7 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     /// Makes a wallpaper all in one colour for one appearance, as `setPicture(_:isDark:)` does
     func setColor(_ color: NSColor, isDark: Bool) {
         let screenSize = Self.screenSize
-        setPicture(isDark: isDark, choice: nil, hasPictureForEach: false) { _, folder in
+        setPicture(isDark: isDark, choice: nil, item: nil, hasPictureForEach: false) { _, folder in
             try Self.colorPicture(color.usingColorSpace(.displayP3)?.cgColor ?? color.cgColor, size: screenSize, named: "Colour", into: folder)
         }
     }
@@ -3730,7 +3826,7 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
 
     /// Makes a wallpaper with a photo from Photos for one appearance, as `setPicture(_:isDark:)` does
     func choose(_ photo: PhotosPickerItem, isDark: Bool) {
-        setPicture(isDark: isDark, choice: nil, hasPictureForEach: false) { _, folder in
+        setPicture(isDark: isDark, choice: nil, item: nil, hasPictureForEach: false) { _, folder in
             guard let data = try await photo.loadTransferable(type: Data.self) else { throw CocoaError(.fileReadUnknown) }
             let file = folder.appendingPathComponent("Photo").appendingPathExtension(photo.supportedContentTypes.first?.preferredFilenameExtension ?? "heic")
             try data.write(to: file)
@@ -3743,15 +3839,20 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     /// picture for the other, and puts it on every display. Until the wallpaper is one Safelight made,
     /// the other appearance takes `file`'s picture for it too.
     func setPicture(_ file: URL, isDark: Bool) {
-        setPicture(isDark: isDark, choice: nil, hasPictureForEach: false) { _, _ in file }
+        setPicture(isDark: isDark, choice: nil, item: nil, hasPictureForEach: false) { _, _ in file }
     }
 
     /// Makes a wallpaper with the picture `picture` gives for one appearance, as `setPicture(_:isDark:)`
     /// does. Until the wallpaper is one Safelight made, the other appearance takes the one `picture`
     /// gives for it, when there's `hasPictureForEach`, or the same one. `picture` fetches it into the
-    /// folder it's given, which is taken away once the wallpaper is made.
-    private func setPicture(isDark: Bool, choice: WallpaperItem.ID?, hasPictureForEach: Bool, picture: @escaping (_ isDark: Bool, _ folder: URL) async throws -> URL) {
-        guard !isChanging, let folder else { return }
+    /// folder it's given, which is taken away once the wallpaper is made. `choice` is remembered as the
+    /// appearance's choice, and `item` is the wallpaper of System Settings' the picture is from.
+    private func setPicture(isDark: Bool, choice: String?, item: WallpaperItem.ID?, hasPictureForEach: Bool, completion: ((_ isMade: Bool) -> Void)? = nil,
+                            picture: @escaping (_ isDark: Bool, _ folder: URL) async throws -> URL) {
+        guard !isChanging, let folder else {
+            completion?(false)
+            return
+        }
         refresh()
         let current = shownWallpaper
         let wallpaper = folder.appendingPathComponent(UUID().uuidString, isDirectory: true).appendingPathComponent("Safelight.heic")
@@ -3784,19 +3885,20 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
                 self.changingChoice = nil
                 self.downloadProgress = nil
                 if isMade {
-                    self.put(wallpaper, isDark: isDark, choice: choice, replacing: current)
+                    self.put(wallpaper, isDark: isDark, choice: choice, item: item, replacing: current)
                 } else {
                     NSLog("Safelight: couldn't make a wallpaper")
                     try? FileManager.default.removeItem(at: wallpaper.deletingLastPathComponent())
                     NSSound.beep()
                 }
+                completion?(isMade)
             }
         }
     }
 
     /// Puts a wallpaper just made on every Space of every display, in place of `current`, and remembers
-    /// which of System Settings' wallpapers it has the picture for an appearance from
-    private func put(_ wallpaper: URL, isDark: Bool, choice: WallpaperItem.ID?, replacing current: URL?) {
+    /// which of System Settings' wallpapers, or which shuffle, it has the picture for an appearance from
+    private func put(_ wallpaper: URL, isDark: Bool, choice: String?, item: WallpaperItem.ID?, replacing current: URL?) {
         for screen in NSScreen.screens {
             var options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
             if let allSpacesOption = Self.allSpacesOption {
@@ -3817,14 +3919,16 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             YourPhotos.shared.reload()
         }
-        // Until then, the other appearance took its picture from the same wallpaper
-        var choices = current == nil ? Choices(light: choice, dark: choice) : choices
+        // Until then, the other appearance took its picture from the same wallpaper, but doesn't shuffle
+        var choices = current == nil ? Choices(light: item, dark: item) : choices
         if isDark {
             choices.dark = choice
         } else {
             choices.light = choice
         }
         self.choices = choices
+        // A shuffle stops once the appearance has another choice
+        WallpaperShuffler.shared.schedule()
     }
 
     /// The file with a wallpaper's picture in it, fetched into `folder` when it isn't one already.
@@ -4024,6 +4128,161 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     }
 }
 
+/// Shuffles the wallpaper's picture for Light, for Dark, or for each, as System Settings › Wallpaper's
+/// shuffles do. macOS's own shuffles are run by its wallpaper service, which only Apple's apps may ask,
+/// so Safelight makes a wallpaper with the next picture itself, every so often, at login or on waking,
+/// while it's running and the wallpaper is still one it made. An appearance's shuffle runs while it's
+/// that appearance's choice; choosing anything else for it stops it.
+final class WallpaperShuffler: ObservableObject {
+    static let shared = WallpaperShuffler()
+
+    /// A shuffle for one appearance: how often it changes, and when it last did, to which picture
+    struct Shuffle: Codable, Equatable {
+        let id: WallpaperShuffle.ID
+        var interval: WallpaperShuffle.Interval
+        var lastChange: Date?
+        var current: WallpaperItem.ID?
+    }
+
+    private struct Shuffles: Codable {
+        var light: Shuffle?
+        var dark: Shuffle?
+
+        subscript(isDark: Bool) -> Shuffle? {
+            get { isDark ? dark : light }
+            set {
+                if isDark {
+                    dark = newValue
+                } else {
+                    light = newValue
+                }
+            }
+        }
+    }
+
+    /// Kept between launches, and after another choice, so a shuffle chosen again changes as often as before
+    @Published private var shuffles: Shuffles {
+        didSet { UserDefaults.standard.set(try? PropertyListEncoder().encode(shuffles), forKey: Self.shufflesKey) }
+    }
+
+    private static let shufflesKey = "WallpaperShuffles"
+    private var timer: Timer?
+    /// The appearances whose shuffles are to change, one after the other, as one wallpaper is made at a time
+    private var queue: [Bool] = []
+
+    init() {
+        shuffles = UserDefaults.standard.data(forKey: Self.shufflesKey).flatMap { try? PropertyListDecoder().decode(Shuffles.self, from: $0) } ?? Shuffles()
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.change(at: .wake)
+        }
+    }
+
+    /// The shuffle an appearance has, while it's the appearance's choice
+    func shuffle(isDark: Bool) -> Shuffle? {
+        guard let shuffle = shuffles[isDark], WallpaperManager.shared.choice(isDark: isDark) == shuffle.id else { return nil }
+        return shuffle
+    }
+
+    /// Makes a shuffle the appearance's choice, with a picture from it now
+    func start(_ shuffle: WallpaperShuffle, isDark: Bool) {
+        let interval = shuffles[isDark].flatMap { $0.id == shuffle.id ? $0.interval : nil } ?? WallpaperShuffle.defaultInterval(for: shuffle.id)
+        change(Shuffle(id: shuffle.id, interval: interval), isDark: isDark)
+    }
+
+    func setInterval(_ interval: WallpaperShuffle.Interval, isDark: Bool) {
+        guard shuffle(isDark: isDark) != nil else { return }
+        shuffles[isDark]?.interval = interval
+        schedule()
+    }
+
+    /// At launch: the shuffles that change at login do, and the others carry on where they were, or
+    /// change now if they were due while Safelight wasn't running
+    func resume() {
+        change(at: .login)
+    }
+
+    /// Changes the shuffles that change at login or on waking, and sets the timer for the others again,
+    /// as it doesn't run while the Mac sleeps
+    private func change(at interval: WallpaperShuffle.Interval) {
+        // The wallpaper may have been changed in System Settings since
+        WallpaperManager.shared.refresh()
+        for isDark in [false, true] where shuffle(isDark: isDark)?.interval == interval {
+            enqueue(isDark)
+        }
+        schedule()
+    }
+
+    /// Sets the timer for the shuffle to change next, in place of the one before
+    func schedule() {
+        timer?.invalidate()
+        timer = nil
+        let next = [false, true].compactMap { isDark -> (isDark: Bool, date: Date)? in
+            guard let shuffle = shuffle(isDark: isDark), let date = shuffle.interval.next(after: shuffle.lastChange ?? .distantPast) else { return nil }
+            return (isDark, date)
+        }.min { $0.date < $1.date }
+        guard let next else { return }
+        let timer = Timer(fire: max(next.date, Date()), interval: 0, repeats: false) { [weak self] _ in
+            WallpaperManager.shared.refresh()
+            self?.enqueue(next.isDark)
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func enqueue(_ isDark: Bool) {
+        guard !queue.contains(isDark) else { return }
+        queue.append(isDark)
+        if queue.count == 1 {
+            changeNext()
+        }
+    }
+
+    private func changeNext() {
+        guard let isDark = queue.first else { return }
+        guard let shuffle = shuffle(isDark: isDark) else {
+            queue.removeFirst()
+            changeNext()
+            return
+        }
+        change(shuffle, isDark: isDark) { [weak self] in
+            self?.queue.removeFirst()
+            self?.changeNext()
+        }
+    }
+
+    /// Makes a wallpaper with another of the shuffle's pictures for the appearance
+    private func change(_ shuffle: Shuffle, isDark: Bool, then completion: (() -> Void)? = nil) {
+        // While a picture chosen in the Wallpaper window is being made, a little later
+        guard !WallpaperManager.shared.isChanging else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                self?.change(shuffle, isDark: isDark, then: completion)
+            }
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Any picture but the one it has now
+            let pictures = WallpaperLibrary.shared.pictures(of: shuffle.id)
+            let next = pictures.filter { $0.id != shuffle.current }.randomElement() ?? pictures.randomElement()
+            DispatchQueue.main.async {
+                guard let next else {
+                    completion?()
+                    return
+                }
+                var shuffle = shuffle
+                shuffle.current = next.id
+                // Even when it can't be made, so a picture that can't be fetched isn't tried over and over
+                shuffle.lastChange = Date()
+                self.shuffles[isDark] = shuffle
+                WallpaperManager.shared.choose(next, isDark: isDark, from: shuffle.id) { [weak self] _ in
+                    self?.schedule()
+                    completion?()
+                }
+            }
+        }
+    }
+}
+
 // MARK: - 9. Wallpaper Library (System Settings › Wallpaper's Own)
 /// One of System Settings › Wallpaper's own wallpapers, as a still picture for Light and one for Dark,
 /// which are the same unless it has one of each
@@ -4070,6 +4329,56 @@ struct WallpaperItem: Identifiable, Hashable {
     }
 }
 
+/// One of System Settings › Wallpaper's shuffles: a new picture from a set every so often. Here each
+/// shuffles the picture for one appearance, so Light and Dark can each have their own.
+struct WallpaperShuffle: Identifiable, Hashable {
+    /// How often a shuffle changes its picture
+    enum Interval: String, Codable {
+        case minute, fiveMinutes, fifteenMinutes, thirtyMinutes, hour, twelveHours, day, twoDays, week, month, login, wake
+
+        var title: String {
+            SystemStrings.shuffleInterval(self)
+        }
+
+        /// When it changes next after `date`, or nil for one that changes at login or on waking
+        func next(after date: Date) -> Date? {
+            let minutes = [Self.minute: 1, .fiveMinutes: 5, .fifteenMinutes: 15, .thirtyMinutes: 30, .hour: 60, .twelveHours: 12 * 60]
+            let days = [Self.day: 1, .twoDays: 2, .week: 7]
+            if let minutes = minutes[self] {
+                return date.addingTimeInterval(TimeInterval(minutes * 60))
+            } else if let days = days[self] {
+                return Calendar.current.date(byAdding: .day, value: days, to: date)
+            } else if self == .month {
+                return Calendar.current.date(byAdding: .month, value: 1, to: date)
+            }
+            return nil
+        }
+    }
+
+    /// Your Photos' shuffle and Colours', besides the aerials'
+    static let photos = "shuffle:photos"
+    static let colors = "shuffle:colors"
+
+    let id: String
+    let name: String
+    /// Four of its pictures, for its thumbnail
+    let thumbnails: [URL?]
+
+    var isAerials: Bool {
+        id != Self.photos && id != Self.colors
+    }
+
+    /// How often it can change, as System Settings offers for its kind, but never every few seconds or
+    /// continuously, as each change makes a wallpaper
+    static func intervals(for id: ID) -> [Interval] {
+        id == photos || id == colors ? [.minute, .fiveMinutes, .fifteenMinutes, .thirtyMinutes, .hour, .day, .login, .wake] : [.twelveHours, .day, .twoDays, .week, .month]
+    }
+
+    static func defaultInterval(for id: ID) -> Interval {
+        id == photos || id == colors ? .hour : .day
+    }
+}
+
 /// System Settings › Wallpaper's own wallpapers, in its sections and its order, gathered as it gathers
 /// them from its extensions, as far as each has a still picture to put in a wallpaper of Safelight's:
 /// its dynamic wallpapers' pictures for Light and for Dark, its aerials as the desktop shows them
@@ -4080,10 +4389,10 @@ final class WallpaperLibrary {
     static let shared = WallpaperLibrary()
 
     struct Section: Identifiable {
-        /// How System Settings shows a section: wallpapers with their names, the user's own photos
-        /// after Add Photo…, or colours as round swatches after a custom colour
+        /// How System Settings shows a section: wallpapers with their names, shuffles with theirs, the
+        /// user's own photos after Add Photo…, or colours as round swatches after a custom colour
         enum Kind {
-            case pictures, photos, colors
+            case pictures, shuffles, photos, colors
         }
 
         let id: String
@@ -4094,6 +4403,8 @@ final class WallpaperLibrary {
         /// Those its row shows until then, when that's not all of them: an aerial section's row leaves
         /// out those System Settings shows only after their first in Show All
         var row: [WallpaperItem]?
+        /// Its shuffles, before its wallpapers
+        var shuffles: [WallpaperShuffle] = []
     }
 
     /// The ID of Your Photos, whose wallpapers are the user's own, in `YourPhotos`
@@ -4102,6 +4413,8 @@ final class WallpaperLibrary {
     let sections: [Section]
     private let items: [WallpaperItem.ID: WallpaperItem]
     private let downloads: [String: URL]
+    /// The aerials' shuffles' pictures, and the colours, by the shuffle's ID
+    private let shufflePictures: [WallpaperShuffle.ID: [WallpaperItem]]
 
     /// Where macOS keeps its pictures, with the list of them in System Settings' order, their
     /// thumbnails, a descriptor of each it downloads once it's chosen, and its colours' swatches
@@ -4153,12 +4466,14 @@ final class WallpaperLibrary {
             let subcategories: [String]?
             /// Whether its section's row shows it, and not only Show All
             let showInTopLevel: Bool?
+            /// Whether the aerials' shuffles have it
+            let includeInShuffle: Bool?
             let preferredOrder: Int?
             let video: URL?
             let variant: Variant?
 
             enum CodingKeys: String, CodingKey {
-                case id, localizedNameKey, accessibilityLabel, categories, subcategories, showInTopLevel, preferredOrder, variant
+                case id, localizedNameKey, accessibilityLabel, categories, subcategories, showInTopLevel, includeInShuffle, preferredOrder, variant
                 case video = "url-4K-SDR-240FPS"
             }
         }
@@ -4176,6 +4491,7 @@ final class WallpaperLibrary {
         let order: Int
         var subcategory = ""
         var isInRow = true
+        var isShuffled = false
         let item: WallpaperItem
     }
 
@@ -4192,6 +4508,7 @@ final class WallpaperLibrary {
 
         var dynamic: [Placed] = []
         var aerialSections: [Section] = []
+        var aerialShuffles: [(category: String, title: String, items: [WallpaperItem])] = []
         var pictures: [WallpaperItem] = []
 
         // The aerials, a section for each category, but macOS's own with the dynamic wallpapers. macOS
@@ -4215,7 +4532,9 @@ final class WallpaperLibrary {
                     placed.append(Placed(order: subcategory.preferredOrder ?? 0, subcategory: subcategory.id, item: item))
                 } else {
                     placed += aerials.compactMap { aerial in
-                        Self.item(ofAerial: aerial).map { Placed(order: aerial.preferredOrder ?? 0, subcategory: subcategory.id, isInRow: aerial.showInTopLevel ?? true, item: $0) }
+                        Self.item(ofAerial: aerial).map {
+                            Placed(order: aerial.preferredOrder ?? 0, subcategory: subcategory.id, isInRow: aerial.showInTopLevel ?? true, isShuffled: aerial.includeInShuffle == true, item: $0)
+                        }
                     }
                 }
             }
@@ -4232,9 +4551,29 @@ final class WallpaperLibrary {
                 rest.removeAll { $0.subcategory == first.subcategory }
             }
             if !placed.isEmpty {
-                aerialSections.append(Section(id: category.id, title: SystemStrings.aerialName(category.localizedNameKey, english: category.localizedNameKey),
-                                              items: bySubcategory.map(\.item), row: placed.filter(\.isInRow).map(\.item)))
+                let title = SystemStrings.aerialName(category.localizedNameKey, english: category.localizedNameKey)
+                aerialSections.append(Section(id: category.id, title: title, items: bySubcategory.map(\.item), row: placed.filter(\.isInRow).map(\.item)))
+                let shuffled = placed.filter(\.isShuffled).map(\.item)
+                if !shuffled.isEmpty {
+                    aerialShuffles.append((category.id, title, shuffled))
+                }
             }
+        }
+        // After them, a shuffle of all the aerials that shuffle, and one of each category's
+        var shufflePictures: [WallpaperShuffle.ID: [WallpaperItem]] = [:]
+        var shuffles: [WallpaperShuffle] = []
+        let allShuffled = aerialShuffles.flatMap(\.items)
+        if !allShuffled.isEmpty {
+            shuffles.append(WallpaperShuffle(id: "shuffle:aerials", name: SystemStrings.shuffleAll, thumbnails: allShuffled.prefix(4).map(\.lightThumbnail)))
+            shufflePictures["shuffle:aerials"] = allShuffled
+        }
+        for category in aerialShuffles {
+            let id = "shuffle:\(category.category)"
+            shuffles.append(WallpaperShuffle(id: id, name: SystemStrings.shuffleCategory(category.title), thumbnails: category.items.prefix(4).map(\.lightThumbnail)))
+            shufflePictures[id] = category.items
+        }
+        if !shuffles.isEmpty {
+            aerialSections.append(Section(id: "shuffle-aerials", title: SystemStrings.shuffleAerials, kind: .shuffles, items: [], shuffles: shuffles))
         }
 
         // Tahoe and Sonoma, from extensions of their own, before macOS's dynamic pictures
@@ -4292,18 +4631,40 @@ final class WallpaperLibrary {
                                  light: .color(swatch), dark: .color(swatch), lightThumbnail: swatch, darkThumbnail: swatch)
         }
 
+        shufflePictures[WallpaperShuffle.colors] = colors
+        let colorShuffle = WallpaperShuffle(id: WallpaperShuffle.colors, name: SystemStrings.shuffle, thumbnails: [])
+
         var sections = [Section(id: "dynamic", title: SystemStrings.dynamicWallpapers, items: Self.sorted(dynamic).map(\.item)),
                         Section(id: Self.yourPhotos, title: SystemStrings.yourPhotos, kind: .photos, items: [])]
         sections += aerialSections
         sections += [Section(id: "pictures", title: SystemStrings.pictures, items: pictures),
-                     Section(id: "colors", title: SystemStrings.colors, kind: .colors, items: colors)]
-        self.sections = sections.filter { $0.kind != .pictures || !$0.items.isEmpty }
+                     Section(id: "colors", title: SystemStrings.colors, kind: .colors, items: colors, shuffles: [colorShuffle])]
+        self.sections = sections.filter { $0.kind == .photos || !$0.items.isEmpty || !$0.shuffles.isEmpty }
         self.items = Dictionary(sections.flatMap(\.items).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.downloads = downloads
+        self.shufflePictures = shufflePictures
     }
 
     func item(_ id: WallpaperItem.ID) -> WallpaperItem? {
         items[id]
+    }
+
+    /// The name of an appearance's choice: a wallpaper, a shuffle, or one of the user's photos
+    func name(of choice: String) -> String? {
+        if let item = items[choice] ?? YourPhotos.shared.items.first(where: { $0.id == choice }) {
+            return item.name
+        }
+        if choice == WallpaperShuffle.photos {
+            return SystemStrings.yourPhotos
+        }
+        return sections.lazy.flatMap(\.shuffles).first { $0.id == choice }?.name
+    }
+
+    /// The pictures a shuffle picks from. Your Photos' are read again each time, as they change, but
+    /// without the wallpapers Safelight made, which are already the desktop's.
+    func pictures(of shuffle: WallpaperShuffle.ID) -> [WallpaperItem] {
+        guard shuffle == WallpaperShuffle.photos else { return shufflePictures[shuffle] ?? [] }
+        return YourPhotos.read().filter { $0.lightThumbnail != nil && !$0.id.hasSuffix("/Safelight.heic") }
     }
 
     /// Where Apple has one of the pictures macOS downloads once it's chosen
@@ -4361,7 +4722,6 @@ final class WallpaperLibrary {
 /// Add Photo… or as an app's wallpaper, newest first. Its image extension keeps the list, and a copy of
 /// each picture, in its container, so reading them is reading another app's data, which macOS asks the
 /// user about the first time; it's read when the Wallpaper window opens, where that question makes sense.
-/// Its shuffle of them all has no one picture, so it isn't here.
 final class YourPhotos: ObservableObject {
     static let shared = YourPhotos()
     @Published private(set) var items: [WallpaperItem] = []
@@ -4390,7 +4750,14 @@ final class YourPhotos: ObservableObject {
         }
     }
 
-    private static func read() -> [WallpaperItem] {
+    /// Its shuffle of them all, first of them, as System Settings has once there are two to shuffle,
+    /// with the newest four in its thumbnail
+    var shuffle: WallpaperShuffle? {
+        guard items.count >= 2 else { return nil }
+        return WallpaperShuffle(id: WallpaperShuffle.photos, name: SystemStrings.yourPhotos, thumbnails: items.prefix(4).map(\.lightThumbnail))
+    }
+
+    static func read() -> [WallpaperItem] {
         guard let data = try? Data(contentsOf: list),
               let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let entries = root["ChoiceRequests.ImageFiles"] as? [Data] else { return [] }
@@ -4431,6 +4798,7 @@ enum SystemStrings {
     private static let dynamicWallpaperSettings = "/System/Library/ExtensionKit/Extensions/WallpaperDynamicExtension.appex"
     private static let imageWallpaperSettings = "/System/Library/ExtensionKit/Extensions/WallpaperImageExtension.appex"
     private static let colorWallpaperSettings = "/System/Library/ExtensionKit/Extensions/WallpaperGradientExtension.appex"
+    private static let aerialWallpaperSettings = "/System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex"
     private static let desktopPictureNames = "/System/Library/PrivateFrameworks/SystemDesktopAppearance.framework"
     /// The aerials' names come with macOS's list of them, which it updates, and with System Settings
     private static let aerialNames = [WallpaperLibrary.aerials.appendingPathComponent("manifest/TVIdleScreenStrings.bundle").path,
@@ -4478,6 +4846,33 @@ enum SystemStrings {
     static let yourPhotos = lookup("YOUR_PHOTOS", in: imageWallpaperSettings, english: "Your Photos")
     static let pictures = lookup("PICTURES", in: imageWallpaperSettings, english: "Pictures")
     static let colors = lookup("COLORS", in: colorWallpaperSettings, english: "Colors")
+
+    // System Settings › Wallpaper's shuffles, and how often each can change its picture: the aerials'
+    // every so many hours or days, the others' every so many minutes, at login or on waking
+    static let shuffle = lookup("SHUFFLE_LABEL", in: imageWallpaperSettings, english: "Shuffle")
+    static let shuffleAerials = lookup("SHUFFLE_AERIALS", in: aerialWallpaperSettings, english: "Shuffle Aerials")
+    static let shuffleAll = lookup("SHUFFLE_ALL", in: aerialWallpaperSettings, english: "Shuffle All")
+
+    static func shuffleCategory(_ category: String) -> String {
+        String(format: lookup("SHUFFLE_CATEGORY_PREFIX_(%@)", in: aerialWallpaperSettings, english: "Shuffle %@"), category)
+    }
+
+    static func shuffleInterval(_ interval: WallpaperShuffle.Interval) -> String {
+        switch interval {
+        case .minute: lookup("SHUFFLE_OPTION_1_MINUTE", in: imageWallpaperSettings, english: "Every Minute")
+        case .fiveMinutes: lookup("SHUFFLE_OPTION_5_MINUTES", in: imageWallpaperSettings, english: "Every 5 Minutes")
+        case .fifteenMinutes: lookup("SHUFFLE_OPTION_15_MINUTES", in: imageWallpaperSettings, english: "Every 15 Minutes")
+        case .thirtyMinutes: lookup("SHUFFLE_OPTION_30_MINUTES", in: imageWallpaperSettings, english: "Every 30 Minutes")
+        case .hour: lookup("SHUFFLE_OPTION_1_HOUR", in: imageWallpaperSettings, english: "Every Hour")
+        case .twelveHours: lookup("SHUFFLE_OPTION_12H", in: aerialWallpaperSettings, english: "Every 12 Hours")
+        case .day: lookup("SHUFFLE_OPTION_1_DAY", in: imageWallpaperSettings, english: "Every Day")
+        case .twoDays: lookup("SHUFFLE_OPTION_2D", in: aerialWallpaperSettings, english: "Every 2 Days")
+        case .week: lookup("SHUFFLE_OPTION_1W", in: aerialWallpaperSettings, english: "Every Week")
+        case .month: lookup("SHUFFLE_OPTION_1M", in: aerialWallpaperSettings, english: "Every Month")
+        case .login: lookup("SHUFFLE_OPTION_ON_LOGIN", in: imageWallpaperSettings, english: "On Login")
+        case .wake: lookup("SHUFFLE_OPTION_ON_WAKEUP", in: imageWallpaperSettings, english: "On Wakeup")
+        }
+    }
     static let customColor = lookup("CUSTOM_COLOR", in: colorWallpaperSettings, english: "Custom Color")
 
     // The names of macOS's pictures, and of Tahoe and Sonoma, whose extensions System Settings has them from
