@@ -1435,7 +1435,7 @@ struct WallpaperGallery: View {
                             .foregroundStyle(.tertiary)
                     }
             } else {
-                WallpaperThumbnail(file: window.isDark ? item.darkThumbnail : item.lightThumbnail)
+                WallpaperThumbnail(file: window.isDark ? item.darkThumbnail : item.lightThumbnail, fadesIn: photos.items.contains(item))
             }
         }
     }
@@ -1685,14 +1685,24 @@ struct ShuffleThumbnail: View {
 /// shown and kept for the next
 struct WallpaperThumbnail: View {
     let file: URL?
+    /// Whether it's empty until its picture has loaded, which then fades in, as Your Photos' photos do in
+    /// System Settings, with the same spring
+    var fadesIn = false
     @State private var image: CGImage?
 
     private static let cache = NSCache<NSURL, CGImage>()
 
+    init(file: URL?, fadesIn: Bool = false) {
+        self.file = file
+        self.fadesIn = fadesIn
+        // One loaded before is there from the start
+        _image = State(initialValue: Self.cached(file))
+    }
+
     var body: some View {
         // Over its frame, so a picture of another shape, like a square one, doesn't make it larger
         Rectangle()
-            .fill(.quaternary)
+            .fill(fadesIn ? AnyShapeStyle(.clear) : AnyShapeStyle(.quaternary))
             .overlay {
                 if let image {
                     Image(decorative: image, scale: 1)
@@ -1702,15 +1712,23 @@ struct WallpaperThumbnail: View {
             }
             .clipped()
             .task(id: file) {
-                image = await Self.image(of: file)
+                if let image = Self.cached(file) {
+                    self.image = image
+                    return
+                }
+                let image = await Self.image(of: file)
+                withAnimation(fadesIn ? .smooth(duration: 0.5) : nil) {
+                    self.image = image
+                }
             }
+    }
+
+    private static func cached(_ file: URL?) -> CGImage? {
+        file.flatMap { cache.object(forKey: $0 as NSURL) }
     }
 
     private static func image(of file: URL?) async -> CGImage? {
         guard let file else { return nil }
-        if let image = cache.object(forKey: file as NSURL) {
-            return image
-        }
         let maxPixelSize = 2 * thumbnailMaxSize
         let image = await Task.detached(priority: .userInitiated) {
             CGImageSourceCreateWithURL(file as CFURL, nil).flatMap {
