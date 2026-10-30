@@ -120,7 +120,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Closed first like Customize…, so the panel isn't left behind it
         popover.performClose(nil)
         NSApp.activate(ignoringOtherApps: true)
-        // The build number is the version, for Sparkle, so it isn't shown again as "1.0 (1.0)"
+        // The build number is only there for Sparkle, so it isn't shown, as "1.0 (2)" would be
         NSApp.orderFrontStandardAboutPanel(options: [.credits: Self.credits, .version: ""])
     }
     
