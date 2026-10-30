@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Makes the short, 1080×1920 at 30 frames a second, from the README's screenshots and the pictures
-# Assets.swift writes. Run it with scripts/make-short.sh, which writes those first.
+# Assets.swift writes. Run it with scripts/make-short.sh, which writes those first. reveal.py makes
+# the short's second version with the parts here.
 #
 #   render.py            writes build/short/safelight-short.mp4
 #   render.py 1 6.5      writes build/short/still-1.0.png and still-6.5.png, the frames at those seconds
@@ -321,14 +322,16 @@ def frame(t):
     return (np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)
 
 
-if __name__ == "__main__":
+def write(frame, end, video, still):
+    """Writes build/short/<video>.mp4 from `frame`, the picture at a time in seconds, `end` seconds
+    long; or with seconds given on the command line, the frames at those seconds, <still>-<seconds>.png."""
     if len(sys.argv) > 1:
         for seconds in map(float, sys.argv[1:]):
-            path = os.path.join(OUT, f"still-{seconds:.1f}.png")
+            path = os.path.join(OUT, f"{still}-{seconds:.1f}.png")
             Image.fromarray(frame(seconds)).save(path)
             print(f"Wrote {os.path.relpath(path, REPO)}")
-        sys.exit()
-    out = os.path.join(OUT, "safelight-short.mp4")
+        return
+    out = os.path.join(OUT, f"{video}.mp4")
     # H.264 in BT.709, which every site and phone plays as it should, with a silent soundtrack, as some
     # editors won't add music to a video with none
     ffmpeg = subprocess.Popen([
@@ -339,10 +342,14 @@ if __name__ == "__main__":
         "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-profile:v", "high",
         "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out], stdin=subprocess.PIPE)
-    frames = round(END * FPS)
+    frames = round(end * FPS)
     for n in range(frames):
         ffmpeg.stdin.write(frame(n / FPS).tobytes())
     ffmpeg.stdin.close()
     if ffmpeg.wait():
         sys.exit("ffmpeg couldn't write the video")
     print(f"Wrote {os.path.relpath(out, REPO)}")
+
+
+if __name__ == "__main__":
+    write(frame, END, "safelight-short", "still")
