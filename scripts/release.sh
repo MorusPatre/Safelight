@@ -72,6 +72,8 @@ APPCAST="$OUT/appcast.xml"
 rm -f "$APPCAST"
 if [[ -f "$KEY" ]] && SIGNATURE=$("$SPARKLE/sign_update" --ed-key-file "$KEY" "$DMG"); then
     INFO="$OUT/Safelight.app/Contents/Info.plist"
+    # Sparkle goes by the build number (CURRENT_PROJECT_VERSION), not the version people see, so
+    # raise it for every disk image put out, even one that keeps the version, or no copy will update.
     BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$INFO")
     MINIMUM_SYSTEM=$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$INFO")
     RELEASE="https://github.com/mopfaff/Safelight/releases"
