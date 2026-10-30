@@ -3818,10 +3818,11 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     /// Makes a wallpaper with `item`'s picture for one appearance, as `setPicture(_:isDark:)` does,
     /// fetching it first: downloading it, taking it from its video, or drawing it in its colour. When
     /// it's a shuffle's picture, the shuffle is what's remembered as the appearance's choice. `completion`
-    /// is told whether the wallpaper was made.
-    func choose(_ item: WallpaperItem, isDark: Bool, from shuffle: WallpaperShuffle.ID? = nil, then completion: ((_ isMade: Bool) -> Void)? = nil) {
+    /// is told whether the wallpaper was made. `isQuiet` for a change nobody asked for just then, which
+    /// doesn't beep when it fails.
+    func choose(_ item: WallpaperItem, isDark: Bool, from shuffle: WallpaperShuffle.ID? = nil, isQuiet: Bool = false, then completion: ((_ isMade: Bool) -> Void)? = nil) {
         let screenSize = Self.screenSize
-        setPicture(isDark: isDark, choice: shuffle ?? item.id, item: item.id, hasPictureForEach: item.light != item.dark, completion: completion) { [weak self] isDark, folder in
+        setPicture(isDark: isDark, choice: shuffle ?? item.id, item: item.id, hasPictureForEach: item.light != item.dark, isQuiet: isQuiet, completion: completion) { [weak self] isDark, folder in
             guard let self else { throw CancellationError() }
             return try await self.file(for: isDark ? item.dark : item.light, in: folder, screenSize: screenSize)
         }
@@ -3864,8 +3865,9 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     /// does. Until the wallpaper is one Safelight made, the other appearance takes the one `picture`
     /// gives for it, when there's `hasPictureForEach`, or the same one. `picture` fetches it into the
     /// folder it's given, which is taken away once the wallpaper is made. `choice` is remembered as the
-    /// appearance's choice, and `item` is the wallpaper of System Settings' the picture is from.
-    private func setPicture(isDark: Bool, choice: String?, item: WallpaperItem.ID?, hasPictureForEach: Bool, completion: ((_ isMade: Bool) -> Void)? = nil,
+    /// appearance's choice, and `item` is the wallpaper of System Settings' the picture is from. It beeps
+    /// when it can't be made, unless `isQuiet`.
+    private func setPicture(isDark: Bool, choice: String?, item: WallpaperItem.ID?, hasPictureForEach: Bool, isQuiet: Bool = false, completion: ((_ isMade: Bool) -> Void)? = nil,
                             picture: @escaping (_ isDark: Bool, _ folder: URL) async throws -> URL) {
         guard !isChanging, let folder else {
             completion?(false)
@@ -3907,7 +3909,9 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
                 } else {
                     NSLog("Safelight: couldn't make a wallpaper")
                     try? FileManager.default.removeItem(at: wallpaper.deletingLastPathComponent())
-                    NSSound.beep()
+                    if !isQuiet {
+                        NSSound.beep()
+                    }
                 }
                 completion?(isMade)
             }
@@ -4184,6 +4188,9 @@ final class WallpaperShuffler: ObservableObject {
     private var timer: Timer?
     /// The appearances whose shuffles are to change, one after the other, as one wallpaper is made at a time
     private var queue: [Bool] = []
+    /// When a shuffle whose picture couldn't be made tries again, with another: a minute later, as when
+    /// the Mac has just woken and isn't online yet, then twice as long each time it fails, up to an hour
+    private var retries: [Bool: (date: Date, delay: TimeInterval)] = [:]
 
     init() {
         shuffles = UserDefaults.standard.data(forKey: Self.shufflesKey).flatMap { try? PropertyListDecoder().decode(Shuffles.self, from: $0) } ?? Shuffles()
@@ -4201,7 +4208,8 @@ final class WallpaperShuffler: ObservableObject {
     /// Makes a shuffle the appearance's choice, with a picture from it now
     func start(_ shuffle: WallpaperShuffle, isDark: Bool) {
         let interval = shuffles[isDark].flatMap { $0.id == shuffle.id ? $0.interval : nil } ?? WallpaperShuffle.defaultInterval(for: shuffle.id)
-        change(Shuffle(id: shuffle.id, interval: interval), isDark: isDark)
+        retries[isDark] = nil
+        change(Shuffle(id: shuffle.id, interval: interval), isDark: isDark, isQuiet: false)
     }
 
     func setInterval(_ interval: WallpaperShuffle.Interval, isDark: Bool) {
@@ -4232,7 +4240,10 @@ final class WallpaperShuffler: ObservableObject {
         timer?.invalidate()
         timer = nil
         let next = [false, true].compactMap { isDark -> (isDark: Bool, date: Date)? in
-            guard let shuffle = shuffle(isDark: isDark), let date = shuffle.interval.next(after: shuffle.lastChange ?? .distantPast) else { return nil }
+            guard let shuffle = shuffle(isDark: isDark) else { return nil }
+            // Once it's due, or when it tries again after failing, even one that changes at login or on waking
+            let due = shuffle.interval.next(after: shuffle.lastChange ?? .distantPast)
+            guard let date = [due, retries[isDark]?.date].compactMap({ $0 }).max() else { return nil }
             return (isDark, date)
         }.min { $0.date < $1.date }
         guard let next else { return }
@@ -4260,18 +4271,19 @@ final class WallpaperShuffler: ObservableObject {
             changeNext()
             return
         }
-        change(shuffle, isDark: isDark) { [weak self] in
+        change(shuffle, isDark: isDark, isQuiet: true) { [weak self] in
             self?.queue.removeFirst()
             self?.changeNext()
         }
     }
 
-    /// Makes a wallpaper with another of the shuffle's pictures for the appearance
-    private func change(_ shuffle: Shuffle, isDark: Bool, then completion: (() -> Void)? = nil) {
+    /// Makes a wallpaper with another of the shuffle's pictures for the appearance. `isQuiet` when it's
+    /// on time, not chosen just now, so it doesn't beep when the picture can't be made.
+    private func change(_ shuffle: Shuffle, isDark: Bool, isQuiet: Bool, then completion: (() -> Void)? = nil) {
         // While a picture chosen in the Wallpaper window is being made, a little later
         guard !WallpaperManager.shared.isChanging else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                self?.change(shuffle, isDark: isDark, then: completion)
+                self?.change(shuffle, isDark: isDark, isQuiet: isQuiet, then: completion)
             }
             return
         }
@@ -4284,13 +4296,22 @@ final class WallpaperShuffler: ObservableObject {
                     completion?()
                     return
                 }
-                var shuffle = shuffle
-                shuffle.current = next.id
-                // Even when it can't be made, so a picture that can't be fetched isn't tried over and over
-                shuffle.lastChange = Date()
-                self.shuffles[isDark] = shuffle
-                WallpaperManager.shared.choose(next, isDark: isDark, from: shuffle.id) { [weak self] _ in
-                    self?.schedule()
+                // Before it's made, as making it sets the timer again
+                var changed = shuffle
+                changed.current = next.id
+                changed.lastChange = Date()
+                self.shuffles[isDark] = changed
+                WallpaperManager.shared.choose(next, isDark: isDark, from: shuffle.id, isQuiet: isQuiet) { [weak self] isMade in
+                    guard let self else { return }
+                    if isMade {
+                        self.retries[isDark] = nil
+                    } else if self.shuffles[isDark] == changed {
+                        // As it was, with the picture still on the desktop, until it tries again
+                        self.shuffles[isDark] = shuffle
+                        let delay = min(2 * (self.retries[isDark]?.delay ?? 30), 60 * 60)
+                        self.retries[isDark] = (Date().addingTimeInterval(delay), delay)
+                    }
+                    self.schedule()
                     completion?()
                 }
             }
