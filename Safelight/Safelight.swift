@@ -3915,10 +3915,6 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
             removeWallpapers(except: wallpaper)
         }
         showPictures(of: wallpaper)
-        // System Settings adds the wallpaper to Your Photos a moment after it's on the desktop
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            YourPhotos.shared.reload()
-        }
         // Until then, the other appearance took its picture from the same wallpaper, but doesn't shuffle
         var choices = current == nil ? Choices(light: item, dark: item) : choices
         if isDark {
@@ -4738,9 +4734,15 @@ final class YourPhotos: ObservableObject {
         let copyURL: URL?
     }
 
-    /// Reads the list again, as System Settings adds to it whenever a wallpaper is set
+    /// Where the list is read, and watched, one read after another, so the last one shown is the latest
+    private let queue = DispatchQueue(label: "Safelight.YourPhotos", qos: .userInitiated)
+    private var watcher: DispatchSourceFileSystemObject?
+
+    /// Reads the list again, and from then on whenever the extension writes it, as System Settings shows
+    /// Your Photos as it changes
     func reload() {
-        DispatchQueue.global(qos: .userInitiated).async {
+        queue.async {
+            self.watchList()
             let items = Self.read()
             DispatchQueue.main.async {
                 if items != self.items {
@@ -4748,6 +4750,26 @@ final class YourPhotos: ObservableObject {
                 }
             }
         }
+    }
+
+    /// The extension adds a wallpaper an app sets to the list about four seconds after it's on the
+    /// desktop, and until then the list's newest is the wallpaper before, which Safelight has taken away,
+    /// so it would be drawn as gone. So the list is read each time it's written,
+    /// as System Settings shows it. It's written to a new file that takes its place, in its folder, so
+    /// it's the folder that's watched.
+    private func watchList() {
+        guard watcher == nil else { return }
+        let descriptor = open(Self.list.deletingLastPathComponent().path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .write, queue: queue)
+        watcher.setEventHandler { [weak self] in
+            self?.reload()
+        }
+        watcher.setCancelHandler {
+            close(descriptor)
+        }
+        watcher.resume()
+        self.watcher = watcher
     }
 
     /// Its shuffle of them all, first of them, as System Settings has once there are two to shuffle,
