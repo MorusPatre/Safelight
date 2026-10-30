@@ -3915,6 +3915,7 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
             removeWallpapers(except: wallpaper)
         }
         showPictures(of: wallpaper)
+        YourPhotos.shared.reloadAfterSettingWallpaper()
         // Until then, the other appearance took its picture from the same wallpaper, but doesn't shuffle
         var choices = current == nil ? Choices(light: item, dark: item) : choices
         if isDark {
@@ -4734,29 +4735,54 @@ final class YourPhotos: ObservableObject {
         let copyURL: URL?
     }
 
+    /// The extension's preferences, which hold the list. System Settings has them from macOS's preferences
+    /// service as soon as they change, and their file is written a few seconds later.
+    private static let preferences = list.deletingPathExtension().path as CFString
+    private static let key = "ChoiceRequests.ImageFiles"
+
     /// Where the list is read, and watched, one read after another, so the last one shown is the latest
     private let queue = DispatchQueue(label: "Safelight.YourPhotos", qos: .userInitiated)
     private var watcher: DispatchSourceFileSystemObject?
+    /// The list as last read, on `queue`; nil until the Wallpaper window has read it
+    private var lastRead: [WallpaperItem]?
 
-    /// Reads the list again, and from then on whenever the extension writes it, as System Settings shows
-    /// Your Photos as it changes
+    /// Reads the list again, and from then on whenever the extension's preferences are written, which is
+    /// how a picture added in System Settings shows up here
     func reload() {
         queue.async {
             self.watchList()
-            let items = Self.read()
-            DispatchQueue.main.async {
-                if items != self.items {
-                    self.items = items
-                }
+            self.update()
+        }
+    }
+
+    /// Shows the wallpaper Safelight has just set once System Settings has added it, which is a moment
+    /// later (a third of a second, with a shuffle's picture): until then the list's newest is the
+    /// wallpaper before, which Safelight has taken away. Nothing tells when, so the list is read every
+    /// so often until it has changed, for a few seconds at most.
+    func reloadAfterSettingWallpaper() {
+        queue.async {
+            guard let before = self.lastRead else { return }
+            self.update(untilChangedFrom: before, attempts: 20)
+        }
+    }
+
+    private func update(untilChangedFrom before: [WallpaperItem]? = nil, attempts: Int = 1) {
+        let items = Self.read()
+        lastRead = items
+        DispatchQueue.main.async {
+            if items != self.items {
+                self.items = items
+            }
+        }
+        if let before, items == before, attempts > 1 {
+            queue.asyncAfter(deadline: .now() + 0.25) {
+                self.update(untilChangedFrom: before, attempts: attempts - 1)
             }
         }
     }
 
-    /// The extension adds a wallpaper an app sets to the list about four seconds after it's on the
-    /// desktop, and until then the list's newest is the wallpaper before, which Safelight has taken away,
-    /// so it would be drawn as gone. So the list is read each time it's written,
-    /// as System Settings shows it. It's written to a new file that takes its place, in its folder, so
-    /// it's the folder that's watched.
+    /// The preferences are written to a new file that takes the old one's place, in their folder, so it's
+    /// the folder that's watched
     private func watchList() {
         guard watcher == nil else { return }
         let descriptor = open(Self.list.deletingLastPathComponent().path, O_EVTONLY)
@@ -4779,10 +4805,12 @@ final class YourPhotos: ObservableObject {
         return WallpaperShuffle(id: WallpaperShuffle.photos, name: SystemStrings.yourPhotos, thumbnails: items.prefix(4).map(\.lightThumbnail))
     }
 
+    /// The list as System Settings has it, from the preferences service, or else from its file
     static func read() -> [WallpaperItem] {
-        guard let data = try? Data(contentsOf: list),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let entries = root["ChoiceRequests.ImageFiles"] as? [Data] else { return [] }
+        CFPreferencesAppSynchronize(preferences)
+        guard let entries = CFPreferencesCopyAppValue(key as CFString, preferences) as? [Data]
+                ?? (try? Data(contentsOf: list)).flatMap({ try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] })?[key] as? [Data]
+        else { return [] }
         let files = entries.compactMap { try? PropertyListDecoder().decode(ImageFile.self, from: $0) }
         // Newest first, to the second, and those added in the same second in the list's order
         let newestFirst = files.enumerated().sorted { (-Int($0.element.dateAdded.timeIntervalSinceReferenceDate), $0.offset) < (-Int($1.element.dateAdded.timeIntervalSinceReferenceDate), $1.offset) }.map(\.element)
