@@ -1081,8 +1081,8 @@ struct AppearanceSegments: NSViewRepresentable {
 /// thumbnails, and the same size, so each is under the thumbnail of the same name, with its corners and
 /// the shadow of one that isn't chosen. Clicking one opens the Wallpaper window to choose its picture,
 /// and pointing at one names the wallpaper it's from. While the wallpaper is one whose pictures Safelight
-/// can't tell, like a colour or an aerial, each is an empty frame with a + in it. Disabled, from when a picture is chosen until it's on the
-/// desktop, it dims.
+/// can't tell, like a shuffle or Sequoia's, each is an empty frame with a + in it. Disabled, from when a
+/// picture is chosen until it's on the desktop, it dims.
 struct WallpaperPicker: View {
     @ObservedObject var wallpaper = WallpaperManager.shared
     let choosePicture: (_ isDark: Bool) -> Void
@@ -3726,10 +3726,9 @@ class AppearanceManager {
 final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its state only changes on the main thread
     static let shared = WallpaperManager()
 
-    /// The pictures the desktop has in Light and in Dark, scaled down for the popover, while its
-    /// wallpaper is one Safelight made, or a picture file macOS shows as it is (`isShownAsItIs(_:)`).
-    /// Nil while it's anything else, whose pictures Safelight can't tell: for a colour, macOS says the
-    /// wallpaper is its default picture.
+    /// The pictures the desktop has in Light and in Dark, scaled down for the popover, while Safelight
+    /// can tell them (`Desktop`). Nil while it can't: for a shuffle, or a wallpaper macOS draws as it's
+    /// shown, like Sequoia's.
     @Published private(set) var thumbnails: Thumbnails?
     /// True from when a picture is chosen until the wallpaper with it is on the desktop
     @Published private(set) var isChanging = false
@@ -3755,14 +3754,26 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
         var dark: WallpaperItem.ID?
     }
 
+    /// What the desktop has, when Safelight can tell the picture it shows in Light and in Dark
+    enum Desktop: Equatable {
+        /// A wallpaper Safelight made, or a picture file macOS shows as it is: its picture for each
+        /// appearance, or its only one in both
+        case file(URL)
+        /// One of System Settings' wallpapers, as macOS shows it in each appearance: its own picture for
+        /// each, or while it's set to Light or Dark, that one's in both
+        case item(WallpaperItem, lightShowsDark: Bool, darkShowsDark: Bool)
+        /// A colour of the user's own
+        case color(CGColor)
+    }
+
     private static let choicesKey = "WallpaperChoices"
 
     init() {
         choices = UserDefaults.standard.data(forKey: Self.choicesKey).flatMap { try? PropertyListDecoder().decode(Choices.self, from: $0) } ?? Choices()
     }
 
-    /// The wallpaper `thumbnails` are of
-    private var shownWallpaper: URL?
+    /// What the desktop has, which `thumbnails` are of
+    private var shown: Desktop?
 
     /// Where each wallpaper is made, in a folder of its own, so the file on the desktop is never
     /// written over, and the one before can be taken away
@@ -3786,34 +3797,50 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
 
     /// Looks at the desktop's wallpaper again, as it can be changed in System Settings › Wallpaper
     func refresh() {
-        let wallpaper = NSScreen.screens.first.flatMap(NSWorkspace.shared.desktopImageURL(for:))
-        showPictures(of: wallpaper.flatMap { isMadeHere($0) || Self.isShownAsItIs($0) ? $0 : nil })
+        guard let screen = NSScreen.screens.first else { return show(nil) }
+        let wallpaper = NSWorkspace.shared.desktopImageURL(for: screen)
+        if let wallpaper, isMadeHere(wallpaper) {
+            show(.file(wallpaper))
+        } else {
+            show(Self.desktop(showing: wallpaper, on: Self.uuid(of: screen)))
+        }
     }
 
-    /// Shows the pictures `wallpaper` has for Light and for Dark, or none. They're loaded in the
-    /// background, and the ones shown before stay until they are.
+    /// Shows the pictures `wallpaper` has for Light and for Dark, or none
     func showPictures(of wallpaper: URL?) {
-        guard wallpaper != shownWallpaper else { return }
-        shownWallpaper = wallpaper
-        guard let wallpaper else {
+        show(wallpaper.map(Desktop.file))
+    }
+
+    /// Shows the pictures the desktop has for Light and for Dark, or none. They're loaded in the
+    /// background, and the ones shown before stay until they are.
+    private func show(_ desktop: Desktop?) {
+        guard desktop != shown else { return }
+        shown = desktop
+        guard let desktop else {
             thumbnails = nil
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let thumbnails = Self.thumbnails(of: wallpaper)
+            let thumbnails = Self.thumbnails(of: desktop)
             DispatchQueue.main.async {
-                guard let self, self.shownWallpaper == wallpaper else { return }
+                guard let self, self.shown == desktop else { return }
                 self.thumbnails = thumbnails
             }
         }
     }
 
     /// The wallpaper of System Settings' whose picture the desktop has for an appearance, or the
-    /// shuffle it's from, while its wallpaper is one Safelight made and the picture isn't one of the
-    /// user's own
+    /// shuffle it's from: the one chosen here while the wallpaper is one Safelight made and the picture
+    /// isn't one of the user's own, or the one System Settings has on the desktop
     func choice(isDark: Bool) -> String? {
-        guard let shownWallpaper, isMadeHere(shownWallpaper) else { return nil }
-        return isDark ? choices.dark : choices.light
+        switch shown {
+        case .file(let wallpaper)? where isMadeHere(wallpaper):
+            return isDark ? choices.dark : choices.light
+        case .item(let item, _, _)?:
+            return item.id
+        default:
+            return nil
+        }
     }
 
     /// Makes a wallpaper with `item`'s picture for one appearance, as `setPicture(_:isDark:)` does,
@@ -3863,11 +3890,12 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     }
 
     /// Makes a wallpaper with the picture `picture` gives for one appearance, as `setPicture(_:isDark:)`
-    /// does. While the desktop has a wallpaper whose pictures Safelight can't tell, the other appearance
-    /// takes the one `picture` gives for it, when there's `hasPictureForEach`, or the same one. `picture` fetches it into the
-    /// folder it's given, which is taken away once the wallpaper is made. `choice` is remembered as the
-    /// appearance's choice, and `item` is the wallpaper of System Settings' the picture is from. It beeps
-    /// when it can't be made, unless `isQuiet`.
+    /// does. The other appearance keeps the picture the desktop shows in it, fetched as one of System
+    /// Settings' own is when it's one of those. While the desktop has a wallpaper whose pictures
+    /// Safelight can't tell, it takes the one `picture` gives for it, when there's `hasPictureForEach`, or
+    /// the same one. `picture` fetches it into the folder it's given, which is taken away once the
+    /// wallpaper is made. `choice` is remembered as the appearance's choice, and `item` is the wallpaper
+    /// of System Settings' the picture is from. It beeps when it can't be made, unless `isQuiet`.
     private func setPicture(isDark: Bool, choice: String?, item: WallpaperItem.ID?, hasPictureForEach: Bool, isQuiet: Bool = false, completion: ((_ isMade: Bool) -> Void)? = nil,
                             picture: @escaping (_ isDark: Bool, _ folder: URL) async throws -> URL) {
         guard !isChanging, let folder else {
@@ -3875,7 +3903,8 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
             return
         }
         refresh()
-        let current = shownWallpaper
+        let current = shown
+        let screenSize = Self.screenSize
         let wallpaper = folder.appendingPathComponent(UUID().uuidString, isDirectory: true).appendingPathComponent("Safelight.heic")
         let pictures = wallpaper.deletingLastPathComponent().appendingPathComponent("Pictures", isDirectory: true)
         isChanging = true
@@ -3886,14 +3915,14 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
             let isMade: Bool
             do {
                 try FileManager.default.createDirectory(at: pictures, withIntermediateDirectories: true)
-                let chosen = try await picture(isDark, pictures)
-                let other: URL
+                let chosen = (file: try await picture(isDark, pictures), isDark: isDark)
+                let other: (file: URL, isDark: Bool)
                 if let current {
-                    other = current
+                    other = try await self.picture(current, shows: !isDark, in: pictures, screenSize: screenSize)
                 } else if hasPictureForEach {
-                    other = try await picture(!isDark, pictures)
+                    other = (try await picture(!isDark, pictures), !isDark)
                 } else {
-                    other = chosen
+                    other = (chosen.file, !isDark)
                 }
                 isMade = Self.makeWallpaper(at: wallpaper, light: isDark ? other : chosen, dark: isDark ? chosen : other)
             } catch {
@@ -3921,7 +3950,7 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
 
     /// Puts a wallpaper just made on every Space of every display, in place of `current`, and remembers
     /// which of System Settings' wallpapers, or which shuffle, it has the picture for an appearance from
-    private func put(_ wallpaper: URL, isDark: Bool, choice: String?, item: WallpaperItem.ID?, replacing current: URL?) {
+    private func put(_ wallpaper: URL, isDark: Bool, choice: String?, item: WallpaperItem.ID?, replacing current: Desktop?) {
         for screen in NSScreen.screens {
             var options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
             if let allSpacesOption = Self.allSpacesOption {
@@ -3937,11 +3966,22 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
         if Self.allSpacesOption != nil {
             removeWallpapers(except: wallpaper)
         }
-        showPictures(of: wallpaper)
+        show(.file(wallpaper))
         YourPhotos.shared.reloadAfterSettingWallpaper()
-        // From a wallpaper whose pictures Safelight couldn't tell, the other appearance took its picture
-        // from the same wallpaper, but doesn't shuffle; from a picture file of the user's, it kept that
-        var choices = current.map { isMadeHere($0) ? self.choices : Choices() } ?? Choices(light: item, dark: item)
+        // The other appearance kept the desktop's picture, which from a wallpaper of System Settings'
+        // is that wallpaper's. From one whose pictures Safelight couldn't tell, it took its picture from
+        // the same wallpaper, but doesn't shuffle.
+        var choices: Choices
+        switch current {
+        case .file(let made)? where isMadeHere(made):
+            choices = self.choices
+        case .item(let current, _, _)?:
+            choices = Choices(light: current.id, dark: current.id)
+        case nil:
+            choices = Choices(light: item, dark: item)
+        default:
+            choices = Choices()
+        }
         if isDark {
             choices.dark = choice
         } else {
@@ -4072,40 +4112,145 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     /// Where macOS's wallpaper service keeps what each display and Space has on its desktop
     private static let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
 
-    /// Whether `wallpaper`, one Safelight didn't make, is a picture file macOS shows as it is, so its
-    /// pictures can be shown and the one for an appearance kept when the other is chosen.
-    /// `desktopImageURL(for:)` names a file whatever the desktop has (its default picture for a colour),
-    /// so it's only taken at its word while macOS's wallpaper service has that file on a desktop as a
-    /// picture of its own, not in a shuffle, and the file is one macOS shows as `thumbnails(of:)` reads it.
-    private static func isShownAsItIs(_ wallpaper: URL) -> Bool {
-        isChosenPicture(wallpaper) && isShownAsRead(wallpaper)
+    /// The ID macOS's wallpaper service knows a display by
+    private static func uuid(of screen: NSScreen) -> String? {
+        guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
     }
 
-    /// Whether macOS's wallpaper service has `file` on a desktop as a picture file, not in a shuffle.
-    /// Each display's and each Space's desktop has its choices, each by the provider that shows it,
-    /// with a picture file's in its configuration, and the shuffle they're in, "$null" for none.
-    private static func isChosenPicture(_ file: URL) -> Bool {
+    /// One of the desktops macOS's wallpaper service keeps: the one choice it shows, by the provider
+    /// that shows it and the configuration it has there, and the options it's shown with, each under the
+    /// kind of control that sets it
+    private struct StoredDesktop {
+        let provider: String
+        let configuration: [String: Any]
+        let options: [String: Any]
+
+        /// Nil for a desktop of more than one choice, or one in a shuffle, which hasn't one picture
+        init?(_ desktop: [String: Any]) {
+            func plist(_ value: Any?) -> [String: Any] {
+                (value as? Data).flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] } ?? [:]
+            }
+            guard let content = desktop["Content"] as? [String: Any], content["Shuffle"] as? String == "$null",
+                  let choices = content["Choices"] as? [[String: Any]], choices.count == 1,
+                  let provider = choices[0]["Provider"] as? String else { return nil }
+            self.provider = provider
+            configuration = plist(choices[0]["Configuration"])
+            options = plist(content["EncodedOptionValues"])["values"] as? [String: Any] ?? [:]
+        }
+
+        var url: URL? {
+            ((configuration["url"] as? [String: Any])?["relative"] as? String).flatMap(URL.init(string:))
+        }
+
+        func option(_ name: String, _ control: String) -> [String: Any]? {
+            ((options[name] as? [String: Any])?[control] as? [String: Any])?["_0"] as? [String: Any]
+        }
+    }
+
+    /// What a display's desktop has, a wallpaper Safelight didn't make, when Safelight can tell its
+    /// pictures, from what macOS's wallpaper service keeps: a desktop for every display, and for each
+    /// Space and display on it, or one for all of them. `desktopImageURL(for:)` names a file whatever the
+    /// desktop has (its default picture for a colour), so it only says which of them it is when one has
+    /// that file. Otherwise it's the one chosen last, which is the Space's own unless Spaces have been
+    /// given wallpapers of their own since.
+    private static func desktop(showing wallpaper: URL?, on display: String?) -> Desktop? {
         guard let data = try? Data(contentsOf: store),
-              let index = try? PropertyListSerialization.propertyList(from: data, format: nil) else { return false }
-        func desktops(in value: Any) -> [[String: Any]] {
-            guard let dictionary = value as? [String: Any] else { return [] }
-            return dictionary.flatMap { key, value -> [[String: Any]] in
-                if key == "Desktop", let content = (value as? [String: Any])?["Content"] as? [String: Any] {
-                    return [content]
-                }
-                return desktops(in: value)
+              let index = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return nil }
+        var desktops: [[String: Any]] = []
+        func add(_ owner: Any?, ofDisplay: Bool = false) {
+            var owner = owner as? [String: Any]
+            if ofDisplay {
+                owner = display.flatMap { (owner?["Displays"] as? [String: Any])?[$0] as? [String: Any] }
+            }
+            if let desktop = owner?["Desktop"] as? [String: Any] {
+                desktops.append(desktop)
             }
         }
-        return desktops(in: index).contains { desktop in
-            guard desktop["Shuffle"] as? String == "$null" else { return false }
-            return (desktop["Choices"] as? [[String: Any]] ?? []).contains { choice in
-                guard choice["Provider"] as? String == "com.apple.wallpaper.choice.image",
-                      let data = choice["Configuration"] as? Data,
-                      let configuration = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                      configuration["type"] as? String == "imageFile",
-                      let url = ((configuration["url"] as? [String: Any])?["relative"] as? String).flatMap(URL.init(string:)) else { return false }
-                return url.standardizedFileURL.path == file.standardizedFileURL.path
+        add(index["AllSpacesAndDisplays"])
+        add(index["SystemDefault"])
+        add(index, ofDisplay: true)
+        for space in (index["Spaces"] as? [String: Any] ?? [:]).values {
+            add((space as? [String: Any])?["Default"])
+            add(space, ofDisplay: true)
+        }
+        func lastSet(_ desktop: [String: Any]) -> Date {
+            desktop["LastSet"] as? Date ?? .distantPast
+        }
+        let named = wallpaper.flatMap { wallpaper in
+            desktops.first { StoredDesktop($0)?.url?.standardizedFileURL.path == wallpaper.standardizedFileURL.path }
+        }
+        return (named ?? desktops.max { lastSet($0) < lastSet($1) }).flatMap(StoredDesktop.init).flatMap(desktop(of:))
+    }
+
+    /// What one of the wallpaper service's desktops shows, when Safelight can tell its pictures
+    private static func desktop(of stored: StoredDesktop) -> Desktop? {
+        let library = WallpaperLibrary.shared
+        let pictureID = stored.url.map { "picture:\($0.deletingPathExtension().lastPathComponent)" }
+        let appearance = stored.option("appearance", "picker")?["id"] as? String
+        // A wallpaper with a picture for each appearance, set to Light or to Dark, shows that one in both
+        func item(_ id: WallpaperItem.ID?, appearance: String?) -> Desktop? {
+            guard let item = id.flatMap({ library.item($0) }) else { return nil }
+            return .item(item, lightShowsDark: appearance == "dark", darkShowsDark: appearance != "light")
+        }
+        switch (stored.provider, stored.configuration["type"] as? String) {
+        case ("com.apple.wallpaper.choice.image", "imageFile"):
+            return stored.url.flatMap { isShownAsRead($0) ? .file($0) : nil }
+        case ("com.apple.wallpaper.choice.image", "systemDesktopPicture"):
+            return item(pictureID, appearance: nil)
+        case ("com.apple.wallpaper.choice.dynamic", _):
+            // macOS's older dynamic wallpapers have a style instead, whose Dynamic changes through the
+            // day, from the Light picture to the Dark one
+            return item(pictureID, appearance: stored.option("style", "picker")?["id"] as? String)
+        case ("com.apple.wallpaper.choice.sonoma", _):
+            return item("picture:Sonoma", appearance: appearance)
+        case ("com.apple.NeptuneOneExtension", _):
+            return item("picture:Tahoe", appearance: appearance)
+        case ("com.apple.wallpaper.choice.aerials", _):
+            // An aerial's ID, or for macOS's own, with one for each appearance, its subcategory's. A
+            // shuffle has its category's, or "shuffle-all-aerials", which isn't any aerial's.
+            return item((stored.configuration["assetID"] as? String).flatMap(library.item(ofAerial:))?.id, appearance: appearance)
+        case ("com.apple.wallpaper.choice.color", let type):
+            // A colour shown as a gradient isn't the colour of its swatch all over
+            guard stored.option("shouldGenerateGradient", "toggle")?["isOn"] as? Bool != true else { return nil }
+            if type == "systemColor", let name = (stored.configuration["systemColor"] as? [String: Any])?.keys.first {
+                return item(library.color(named: name)?.id, appearance: nil)
             }
+            if type == "customColor", let color = (stored.option("customColor", "color")?["color"] as? [String: Any]).flatMap(color) {
+                return .color(color)
+            }
+            return nil // the colours' shuffle
+        default:
+            // Sequoia's and Macintosh's, which macOS draws as they're shown, and its default wallpaper
+            return nil
+        }
+    }
+
+    /// A colour as the wallpaper service keeps it: its components, and its colour space, by name, or for
+    /// Display P3, which the Colours panel gives, by the number 7 (the desktop shows those components
+    /// unchanged on a Display P3 screen)
+    private static func color(_ stored: [String: Any]) -> CGColor? {
+        guard let components = stored["components"] as? [Double], components.count == 4,
+              let data = stored["colorSpace"] as? Data,
+              let space = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let name = space as? String ?? (space as? Int == 7 ? CGColorSpace.displayP3 as String : nil),
+              let colorSpace = CGColorSpace(name: name as CFString) else { return nil }
+        return CGColor(colorSpace: colorSpace, components: components.map { CGFloat($0) })
+    }
+
+    /// The file with the picture `desktop` shows in an appearance, fetched into `folder` when it isn't
+    /// one already, and whether it's that file's picture for Dark, for one with a picture for each
+    private func picture(_ desktop: Desktop, shows isDark: Bool, in folder: URL, screenSize: CGSize) async throws -> (file: URL, isDark: Bool) {
+        switch desktop {
+        case .file(let file):
+            return (file, isDark)
+        case .item(let item, let lightShowsDark, let darkShowsDark):
+            let showsDark = isDark ? darkShowsDark : lightShowsDark
+            return (try await file(for: showsDark ? item.dark : item.light, in: folder, screenSize: screenSize), showsDark)
+        case .color(let color):
+            // Named apart from a colour chosen for the other appearance, which is fetched into the same folder
+            return (try Self.colorPicture(color, size: screenSize, named: "Desktop Colour", into: folder), isDark)
         }
     }
 
@@ -4131,12 +4276,13 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
     }
 
     /// Writes a wallpaper with `light`'s picture for Light and `dark`'s for Dark, or when that's the same
-    /// picture, a plain one of it.
-    private static func makeWallpaper(at wallpaper: URL, light: URL, dark: URL) -> Bool {
-        guard let lightSource = CGImageSourceCreateWithURL(light as CFURL, nil),
-              let darkSource = light == dark ? lightSource : CGImageSourceCreateWithURL(dark as CFURL, nil) else { return false }
-        let lightIndex = index(in: lightSource, isDark: false)
-        let darkIndex = index(in: darkSource, isDark: true)
+    /// picture, a plain one of it. Each is a file's picture for Light or for Dark, for a file with one for
+    /// each, or its only one.
+    private static func makeWallpaper(at wallpaper: URL, light: (file: URL, isDark: Bool), dark: (file: URL, isDark: Bool)) -> Bool {
+        guard let lightSource = CGImageSourceCreateWithURL(light.file as CFURL, nil),
+              let darkSource = light.file == dark.file ? lightSource : CGImageSourceCreateWithURL(dark.file as CFURL, nil) else { return false }
+        let lightIndex = index(in: lightSource, isDark: light.isDark)
+        let darkIndex = index(in: darkSource, isDark: dark.isDark)
         let isOnePicture = lightSource === darkSource && lightIndex == darkIndex
         guard let lightPicture = picture(in: lightSource, at: lightIndex),
               let darkPicture = isOnePicture ? lightPicture : picture(in: darkSource, at: darkIndex),
@@ -4168,6 +4314,31 @@ final class WallpaperManager: ObservableObject, @unchecked Sendable { // Its sta
               let light = picture(in: source, at: index(in: source, isDark: false), maxPixelSize: 400),
               let dark = picture(in: source, at: index(in: source, isDark: true), maxPixelSize: 400) else { return nil }
         return Thumbnails(light: light, dark: dark)
+    }
+
+    /// The pictures the desktop shows in Light and in Dark, scaled down as `thumbnails(of:)` scales them.
+    /// A wallpaper of System Settings' shows its thumbnails, which are the ones the Wallpaper window
+    /// shows, and a colour is just the colour.
+    private static func thumbnails(of desktop: Desktop) -> Thumbnails? {
+        switch desktop {
+        case .file(let wallpaper):
+            return thumbnails(of: wallpaper)
+        case .item(let item, let lightShowsDark, let darkShowsDark):
+            func thumbnail(showsDark: Bool) -> CGImage? {
+                guard let file = showsDark ? item.darkThumbnail : item.lightThumbnail,
+                      let source = CGImageSourceCreateWithURL(file as CFURL, nil) else { return nil }
+                return picture(in: source, at: index(in: source, isDark: showsDark), maxPixelSize: 400)
+            }
+            guard let light = thumbnail(showsDark: lightShowsDark), let dark = thumbnail(showsDark: darkShowsDark) else { return nil }
+            return Thumbnails(light: light, dark: dark)
+        case .color(let color):
+            guard let colorSpace = color.colorSpace.flatMap({ $0.model == .rgb ? $0 : nil }) ?? CGColorSpace(name: CGColorSpace.sRGB),
+                  let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: colorSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+            context.setFillColor(color)
+            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+            return context.makeImage().map { Thumbnails(light: $0, dark: $0) }
+        }
     }
 
     /// Which of `source`'s pictures is for an appearance: as its metadata says, or with none, its main one
@@ -4503,6 +4674,9 @@ final class WallpaperLibrary {
 
     let sections: [Section]
     private let items: [WallpaperItem.ID: WallpaperItem]
+    /// The aerials, by the ID macOS's wallpaper service knows each by: its own, or for one with a video
+    /// for each appearance, its subcategory's
+    private let aerialItems: [String: WallpaperItem.ID]
     private let downloads: [String: URL]
     /// The aerials' shuffles' pictures, and the colours, by the shuffle's ID
     private let shufflePictures: [WallpaperShuffle.ID: [WallpaperItem]]
@@ -4598,6 +4772,7 @@ final class WallpaperLibrary {
         }
 
         var dynamic: [Placed] = []
+        var aerialItems: [String: WallpaperItem.ID] = [:]
         var aerialSections: [Section] = []
         var aerialShuffles: [(category: String, title: String, items: [WallpaperItem])] = []
         var pictures: [WallpaperItem] = []
@@ -4621,11 +4796,12 @@ final class WallpaperLibrary {
                                              light: .aerial(id: light.id, video: lightVideo), dark: .aerial(id: dark.id, video: darkVideo),
                                              lightThumbnail: Self.thumbnail(ofAerial: light.id), darkThumbnail: Self.thumbnail(ofAerial: dark.id), badge: .dynamic)
                     placed.append(Placed(order: subcategory.preferredOrder ?? 0, subcategory: subcategory.id, item: item))
+                    aerialItems[subcategory.id] = item.id
                 } else {
-                    placed += aerials.compactMap { aerial in
-                        Self.item(ofAerial: aerial).map {
-                            Placed(order: aerial.preferredOrder ?? 0, subcategory: subcategory.id, isInRow: aerial.showInTopLevel ?? true, isShuffled: aerial.includeInShuffle == true, item: $0)
-                        }
+                    for aerial in aerials {
+                        guard let item = Self.item(ofAerial: aerial) else { continue }
+                        placed.append(Placed(order: aerial.preferredOrder ?? 0, subcategory: subcategory.id, isInRow: aerial.showInTopLevel ?? true, isShuffled: aerial.includeInShuffle == true, item: item))
+                        aerialItems[aerial.id] = item.id
                     }
                 }
             }
@@ -4732,12 +4908,23 @@ final class WallpaperLibrary {
                      Section(id: "colors", title: SystemStrings.colors, kind: .colors, items: colors, shuffles: [colorShuffle])]
         self.sections = sections.filter { $0.kind == .photos || !$0.items.isEmpty || !$0.shuffles.isEmpty }
         self.items = Dictionary(sections.flatMap(\.items).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self.aerialItems = aerialItems
         self.downloads = downloads
         self.shufflePictures = shufflePictures
     }
 
     func item(_ id: WallpaperItem.ID) -> WallpaperItem? {
         items[id]
+    }
+
+    /// An aerial by the ID macOS's wallpaper service knows it by
+    func item(ofAerial id: String) -> WallpaperItem? {
+        aerialItems[id].flatMap { items[$0] }
+    }
+
+    /// One of macOS's colours by the name its wallpaper service gives it, "blueViolet" for Blue Violet
+    func color(named name: String) -> WallpaperItem? {
+        Self.colors.first { $0.replacingOccurrences(of: " ", with: "").lowercased() == name.lowercased() }.flatMap { items["color:\($0)"] }
     }
 
     /// The name of an appearance's choice: a wallpaper, a shuffle, or one of the user's photos
